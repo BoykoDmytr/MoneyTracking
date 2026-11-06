@@ -1,6 +1,8 @@
 package ua.moneytracking
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -37,123 +39,133 @@ internal fun SettingsScreen(
     var section by rememberSaveable { mutableStateOf("general") }
     BackHandler(enabled = section != "general") { section = "general" }
 
-    LazyColumn(
+    AnimatedContent(
+        targetState = section,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        when (section) {
-            "accounts" -> {
-                item {
-                    ManagementHeading("Рахунки", { section = "general" }, onAddAccount)
-                }
-                item {
-                    Text("Створюйте рахунки та змінюйте їхній баланс тут. Щоденний облік залишається на вкладці «Огляд».", color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
-                }
-                if (state.accounts.isEmpty()) item {
-                    SettingsCard {
-                        Icon(Icons.Default.AccountBalanceWallet, null, tint = Accent, modifier = Modifier.size(30.dp))
-                        Text("Почніть із першого рахунку", fontWeight = FontWeight.SemiBold)
-                        Text("Картка або готівка — достатньо назви та початкового залишку.", color = Muted, fontSize = 13.sp)
-                        Button(onClick = onAddAccount) { Text("Додати рахунок") }
+        transitionSpec = {
+            val direction = if (targetState == "general") -1 else 1
+            (fadeIn(tween(160)) + slideInHorizontally(tween(180)) { direction * it / 16 }) togetherWith fadeOut(tween(80))
+        },
+        label = "settingsSection"
+    ) { selectedSection ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            when (selectedSection) {
+                "accounts" -> {
+                    item {
+                        ManagementHeading("Рахунки", { section = "general" }, onAddAccount)
                     }
-                }
-                items(state.accounts, key = { it.id }) { account ->
-                    SettingsCard {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            SettingIcon(if (account.cash) Icons.Default.Payments else Icons.Default.CreditCard, Color(account.color))
-                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                                Text(account.name, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-                                Text(if (account.cash) "Готівка" else "Банківська картка" + if (account.lastFour.isBlank()) "" else " · ${account.lastFour}", color = Muted, fontSize = 12.sp)
+                    item {
+                        Text("Створюйте рахунки та змінюйте їхній баланс тут. Щоденний облік залишається на вкладці «Огляд».", color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
+                    }
+                    if (state.accounts.isEmpty()) item {
+                        SettingsCard {
+                            Icon(Icons.Default.AccountBalanceWallet, null, tint = Accent, modifier = Modifier.size(30.dp))
+                            Text("Почніть із першого рахунку", fontWeight = FontWeight.SemiBold)
+                            Text("Картка або готівка — достатньо назви та початкового залишку.", color = Muted, fontSize = 13.sp)
+                            Button(onClick = onAddAccount) { Text("Додати рахунок") }
+                        }
+                    }
+                    items(state.accounts, key = { it.id }) { account ->
+                        SettingsCard {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                SettingIcon(if (account.cash) Icons.Default.Payments else Icons.Default.CreditCard, Color(account.color))
+                                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                    Text(account.name, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+                                    Text(if (account.cash) "Готівка" else "Банківська картка" + if (account.lastFour.isBlank()) "" else " · ${account.lastFour}", color = Muted, fontSize = 12.sp)
+                                }
                             }
-                        }
-                        Text(money(balance(account, state.entries)), fontSize = 24.sp, fontWeight = FontWeight.Medium)
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = { onEditAccount(account) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 0.dp)) {
-                                Icon(Icons.Default.Edit, null, Modifier.size(17.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Змінити назву або баланс", maxLines = 2, fontSize = 13.sp)
-                            }
-                            Spacer(Modifier.width(4.dp))
-                            IconButton(onClick = { onDeleteAccount(account) }) {
-                                Icon(Icons.Default.DeleteOutline, "Видалити рахунок ${account.name}", tint = Red)
-                            }
-                        }
-                    }
-                }
-            }
-            "categories" -> {
-                item { ManagementHeading("Категорії", { section = "general" }, onAddCategory) }
-                item {
-                    Text("Назви, іконки та кольори категорій. Видалення категорії збереже її операції без категорії.", color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
-                }
-                if (state.categories.isEmpty()) item {
-                    SettingsCard {
-                        Text("Створіть свою першу категорію", fontWeight = FontWeight.SemiBold)
-                        Button(onClick = onAddCategory) { Text("Додати категорію") }
-                    }
-                }
-                items(state.categories, key = { it.id }) { category ->
-                    Surface(color = Panel, shape = RoundedCornerShape(20.dp)) {
-                        Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            CategoryBadge(category, Modifier.size(42.dp))
-                            Text(category.name, Modifier.weight(1f).padding(horizontal = 12.dp), fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            IconButton(onClick = { onEditCategory(category) }) { Icon(Icons.Default.Edit, "Редагувати категорію ${category.name}", tint = Accent, modifier = Modifier.size(21.dp)) }
-                            IconButton(onClick = { onDeleteCategory(category) }) { Icon(Icons.Default.DeleteOutline, "Видалити категорію ${category.name}", tint = Red, modifier = Modifier.size(21.dp)) }
-                        }
-                    }
-                }
-            }
-            else -> {
-                item {
-                    Text("Усе керування зібране тут", fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                    Text("Налаштуйте один раз — далі просто ведіть облік.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 5.dp))
-                }
-                item {
-                    SettingsCard(spacing = 0) {
-                        SettingsLink(Icons.Default.AccountBalanceWallet, "Рахунки", "${state.accounts.size} · назви, залишки та оформлення") { section = "accounts" }
-                        HorizontalDivider(color = Muted.copy(alpha = .12f))
-                        SettingsLink(Icons.Default.Category, "Категорії", "${state.categories.size} · іконки, кольори та назви") { section = "categories" }
-                    }
-                }
-                item { SettingsSectionLabel("ШВИДКЕ ДОДАВАННЯ") }
-                item {
-                    SettingsCard {
-                        Text("Рахунок за замовчуванням", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                        AccountPreferencePicker(state.accounts, preferences.defaultAccountId) {
-                            onPreferencesChange(preferences.copy(defaultAccountId = it))
-                        }
-                        Spacer(Modifier.height(2.dp))
-                        Text("Тип нової операції", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf("expense" to "Витрата", "income" to "Дохід", "transfer" to "Переказ").forEach { (kind, label) ->
-                                FilterChip(
-                                    selected = preferences.defaultKind == kind,
-                                    onClick = { onPreferencesChange(preferences.copy(defaultKind = kind)) },
-                                    label = { Text(label, fontSize = 12.sp) },
-                                    modifier = Modifier.weight(1f)
-                                )
+                            Text(money(balance(account, state.entries)), fontSize = 24.sp, fontWeight = FontWeight.Medium)
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = { onEditAccount(account) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 0.dp)) {
+                                    Icon(Icons.Default.Edit, null, Modifier.size(17.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Змінити назву або баланс", maxLines = 2, fontSize = 13.sp)
+                                }
+                                Spacer(Modifier.width(4.dp))
+                                IconButton(onClick = { onDeleteAccount(account) }) {
+                                    Icon(Icons.Default.DeleteOutline, "Видалити рахунок ${account.name}", tint = Red)
+                                }
                             }
                         }
                     }
                 }
-                item { SettingsSectionLabel("ПРИВАТНІСТЬ І ВІДГУК") }
-                item {
-                    SettingsCard(spacing = 0) {
-                        PreferenceToggle("Приховувати загальний баланс", "На головному екрані показуватимуться крапки замість суми.", preferences.hideBalance) { onPreferencesChange(preferences.copy(hideBalance = it)) }
-                        HorizontalDivider(color = Muted.copy(alpha = .12f))
-                        PreferenceToggle("Вібровідгук клавіатури", "Легке підтвердження натискання під час введення суми.", preferences.haptics) { onPreferencesChange(preferences.copy(haptics = it)) }
+                "categories" -> {
+                    item { ManagementHeading("Категорії", { section = "general" }, onAddCategory) }
+                    item {
+                        Text("Назви, іконки та кольори категорій. Видалення категорії збереже її операції без категорії.", color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
+                    }
+                    if (state.categories.isEmpty()) item {
+                        SettingsCard {
+                            Text("Створіть свою першу категорію", fontWeight = FontWeight.SemiBold)
+                            Button(onClick = onAddCategory) { Text("Додати категорію") }
+                        }
+                    }
+                    items(state.categories, key = { it.id }) { category ->
+                        Surface(color = Panel, shape = RoundedCornerShape(20.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                CategoryBadge(category, Modifier.size(42.dp))
+                                Text(category.name, Modifier.weight(1f).padding(horizontal = 12.dp), fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                IconButton(onClick = { onEditCategory(category) }) { Icon(Icons.Default.Edit, "Редагувати категорію ${category.name}", tint = Accent, modifier = Modifier.size(21.dp)) }
+                                IconButton(onClick = { onDeleteCategory(category) }) { Icon(Icons.Default.DeleteOutline, "Видалити категорію ${category.name}", tint = Red, modifier = Modifier.size(21.dp)) }
+                            }
+                        }
                     }
                 }
-                item { SettingsSectionLabel("ПРО ЗАСТОСУНОК") }
-                item {
-                    SettingsCard {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Мова", color = Muted, fontSize = 13.sp); Text("Українська", fontSize = 13.sp) }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Валюта", color = Muted, fontSize = 13.sp); Text("Гривня · UAH", fontSize = 13.sp) }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Оформлення", color = Muted, fontSize = 13.sp); Text("Темна тема", fontSize = 13.sp) }
-                        HorizontalDivider(color = Muted.copy(alpha = .12f), modifier = Modifier.padding(vertical = 4.dp))
-                        Text("Ваші дані залишаються на телефоні", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                        Text("Без сервера, реклами та банківських підключень. Очищення даних або видалення застосунку видалить фінансову історію. Автоматичного резервного копіювання немає.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+                else -> {
+                    item {
+                        Text("Усе керування зібране тут", fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        Text("Налаштуйте один раз — далі просто ведіть облік.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 5.dp))
+                    }
+                    item {
+                        SettingsCard(spacing = 0) {
+                            SettingsLink(Icons.Default.AccountBalanceWallet, "Рахунки", "${state.accounts.size} · назви, залишки та оформлення") { section = "accounts" }
+                            HorizontalDivider(color = Muted.copy(alpha = .12f))
+                            SettingsLink(Icons.Default.Category, "Категорії", "${state.categories.size} · іконки, кольори та назви") { section = "categories" }
+                        }
+                    }
+                    item { SettingsSectionLabel("ШВИДКЕ ДОДАВАННЯ") }
+                    item {
+                        SettingsCard {
+                            Text("Рахунок за замовчуванням", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            AccountPreferencePicker(state.accounts, preferences.defaultAccountId) {
+                                onPreferencesChange(preferences.copy(defaultAccountId = it))
+                            }
+                            Spacer(Modifier.height(2.dp))
+                            Text("Тип нової операції", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                listOf("expense" to "Витрата", "income" to "Дохід", "transfer" to "Переказ").forEach { (kind, label) ->
+                                    FilterChip(
+                                        selected = preferences.defaultKind == kind,
+                                        onClick = { onPreferencesChange(preferences.copy(defaultKind = kind)) },
+                                        label = { Text(label, fontSize = 12.sp) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    item { SettingsSectionLabel("ПРИВАТНІСТЬ І ВІДГУК") }
+                    item {
+                        SettingsCard(spacing = 0) {
+                            PreferenceToggle("Приховувати загальний баланс", "На головному екрані показуватимуться крапки замість суми.", preferences.hideBalance) { onPreferencesChange(preferences.copy(hideBalance = it)) }
+                            HorizontalDivider(color = Muted.copy(alpha = .12f))
+                            PreferenceToggle("Вібровідгук клавіатури", "Легке підтвердження натискання під час введення суми.", preferences.haptics) { onPreferencesChange(preferences.copy(haptics = it)) }
+                        }
+                    }
+                    item { SettingsSectionLabel("ПРО ЗАСТОСУНОК") }
+                    item {
+                        SettingsCard {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Мова", color = Muted, fontSize = 13.sp); Text("Українська", fontSize = 13.sp) }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Валюта", color = Muted, fontSize = 13.sp); Text("Гривня · UAH", fontSize = 13.sp) }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Оформлення", color = Muted, fontSize = 13.sp); Text("Темна тема", fontSize = 13.sp) }
+                            HorizontalDivider(color = Muted.copy(alpha = .12f), modifier = Modifier.padding(vertical = 4.dp))
+                            Text("Ваші дані залишаються на телефоні", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            Text("Без сервера, реклами та банківських підключень. Очищення даних або видалення застосунку видалить фінансову історію. Автоматичного резервного копіювання немає.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+                        }
                     }
                 }
             }

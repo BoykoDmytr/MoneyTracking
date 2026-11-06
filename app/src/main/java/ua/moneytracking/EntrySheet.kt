@@ -2,6 +2,14 @@ package ua.moneytracking
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -22,6 +30,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -75,6 +84,8 @@ internal fun EntrySheet(
     val haptics = LocalHapticFeedback.current
     val screenHeight = LocalConfiguration.current.screenHeightDp
     val keyHeight = if (screenHeight < 720) 48.dp else if (screenHeight < 860) 56.dp else 64.dp
+    val detailRotation by animateFloatAsState(if (details) 180f else 0f, tween(160), label = "Entry detail chevron")
+    val calculatorTint by animateColorAsState(if (calculator) Accent else Muted, tween(150), label = "Calculator selection")
     val evaluated = AmountInput.evaluate(expression)
     val validTransfer = !transfer || (target != null && target != account)
     val canSave = evaluated != null && evaluated > 0 && validTransfer && selectedAccount != null
@@ -126,7 +137,9 @@ internal fun EntrySheet(
                 Row(Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     listOf("expense", "income", "transfer").forEach { type ->
                         val selected = kind == type
-                        Surface(onClick = { kind = type; error = "" }, modifier = Modifier.weight(1f).height(38.dp), shape = RoundedCornerShape(12.dp), color = if (selected) Accent else Bg, contentColor = if (selected) Bg else Muted) {
+                        val background by animateColorAsState(if (selected) Accent else Bg, tween(150), label = "Operation type background")
+                        val foreground by animateColorAsState(if (selected) Bg else Muted, tween(150), label = "Operation type foreground")
+                        Surface(onClick = { kind = type; error = "" }, modifier = Modifier.weight(1f).height(38.dp), shape = RoundedCornerShape(12.dp), color = background, contentColor = foreground) {
                             Box(contentAlignment = Alignment.Center) { Text(kindName(type), fontSize = 13.sp, lineHeight = 18.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) }
                         }
                     }
@@ -148,12 +161,16 @@ internal fun EntrySheet(
                         Icon(Icons.Default.CalendarToday, null, Modifier.size(16.dp), tint = Muted)
                         Spacer(Modifier.width(6.dp))
                         Text(if (details) "Згорнути деталі" else (if (date.toLocalDate() == LocalDate.now()) "Сьогодні" else date.format(DateTimeFormatter.ofPattern("d MMM", uk))) + if (note.isNotBlank()) " · коментар" else " · деталі", fontSize = 12.sp, color = Muted, maxLines = 1)
-                        Icon(if (details) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, Modifier.size(17.dp), tint = Muted)
+                        Icon(Icons.Default.ExpandMore, null, Modifier.size(17.dp).rotate(detailRotation), tint = Muted)
                     }
-                    IconButton(onClick = { calculator = !calculator }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Calculate, if (calculator) "Приховати калькулятор" else "Калькулятор", Modifier.size(20.dp), tint = if (calculator) Accent else Muted) }
+                    IconButton(onClick = { calculator = !calculator }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Calculate, if (calculator) "Приховати калькулятор" else "Калькулятор", Modifier.size(20.dp), tint = calculatorTint) }
                     TextButton(onClick = { press("C") }, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("Очистити", fontSize = 12.sp, color = Muted) }
                 }
-                if (details) {
+                AnimatedVisibility(
+                    visible = details,
+                    enter = expandVertically(tween(180)) + fadeIn(tween(140)),
+                    exit = shrinkVertically(tween(160)) + fadeOut(tween(100))
+                ) {
                     Surface(color = Bg, shape = RoundedCornerShape(14.dp)) {
                         Column(Modifier.fillMaxWidth().padding(10.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -170,12 +187,18 @@ internal fun EntrySheet(
                 }
                 if (!validTransfer) Text("Для переказу оберіть два різні рахунки.", color = Muted, fontSize = 12.sp)
                 if (error.isNotBlank()) Text(error, fontSize = 12.sp, color = Red)
-                if (calculator) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("+", "−", "×", "÷", "=").forEach { key ->
-                        EntryKey(key, Modifier.weight(1f).height(44.dp), description = when (key) { "+" -> "Додати до суми"; "−" -> "Відняти"; "×" -> "Помножити"; "÷" -> "Поділити"; else -> "Обчислити" }, toned = true) {
-                            if (key != "=") press(key) else {
-                                val amount = AmountInput.evaluate(expression)
-                                if (amount == null || amount < 0) error = "Перевірте обчислення." else { expression = editableMoney(amount); replaceAmount = false; error = "" }
+                AnimatedVisibility(
+                    visible = calculator,
+                    enter = expandVertically(tween(180)) + fadeIn(tween(140)),
+                    exit = shrinkVertically(tween(160)) + fadeOut(tween(100))
+                ) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("+", "−", "×", "÷", "=").forEach { key ->
+                            EntryKey(key, Modifier.weight(1f).height(44.dp), description = when (key) { "+" -> "Додати до суми"; "−" -> "Відняти"; "×" -> "Помножити"; "÷" -> "Поділити"; else -> "Обчислити" }, toned = true) {
+                                if (key != "=") press(key) else {
+                                    val amount = AmountInput.evaluate(expression)
+                                    if (amount == null || amount < 0) error = "Перевірте обчислення." else { expression = editableMoney(amount); replaceAmount = false; error = "" }
+                                }
                             }
                         }
                     }
@@ -208,7 +231,8 @@ internal fun EntrySheet(
         else AlertDialog(onDismissRequest = { categoryPicker = false }, title = { Text("Категорія") }, text = {
             LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.heightIn(max = 340.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(state.categories, key = { it.id }) { c ->
-                    Surface(onClick = { category = c.id; categoryPicker = false }, color = if (category == c.id) Color(c.color).copy(alpha = .16f) else Color.Transparent, shape = RoundedCornerShape(14.dp)) {
+                    val background by animateColorAsState(if (category == c.id) Color(c.color).copy(alpha = .16f) else Color.Transparent, tween(150), label = "Category selection")
+                    Surface(onClick = { category = c.id; categoryPicker = false }, color = background, shape = RoundedCornerShape(14.dp)) {
                         Column(Modifier.padding(vertical = 10.dp, horizontal = 3.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             CategoryBadge(c, Modifier.size(40.dp))
                             Text(c.name, fontSize = 11.sp, lineHeight = 14.sp, maxLines = 2, minLines = 2, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 5.dp))
@@ -224,9 +248,10 @@ internal fun EntrySheet(
 }
 
 @Composable private fun EntrySelection(label: String, value: String, icon: ImageVector, color: Color, modifier: Modifier, click: () -> Unit) {
+    val tint by animateColorAsState(color, tween(150), label = "Transaction field tint")
     Surface(onClick = click, modifier = modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(14.dp), color = Bg, border = BorderStroke(1.dp, Muted.copy(alpha = .12f))) {
         Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = color, modifier = Modifier.size(20.dp))
+            Icon(icon, null, tint = tint, modifier = Modifier.size(20.dp))
             Column(Modifier.weight(1f).padding(start = 8.dp)) {
                 Text(label, fontSize = 10.sp, lineHeight = 14.sp, color = Muted)
                 Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
@@ -245,7 +270,8 @@ internal fun EntrySheet(
         LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (accounts.isEmpty()) item { Text("Для переказу потрібні щонайменше два рахунки.", color = Muted) }
             items(accounts, key = { it.id }) { account ->
-                Surface(onClick = { select(account) }, color = if (account.id == selected) Accent.copy(alpha = .1f) else Color.Transparent, shape = RoundedCornerShape(14.dp)) {
+                val background by animateColorAsState(if (account.id == selected) Accent.copy(alpha = .1f) else Color.Transparent, tween(150), label = "Account selection")
+                Surface(onClick = { select(account) }, color = background, shape = RoundedCornerShape(14.dp)) {
                     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (account.cash) Icons.Default.Payments else Icons.Default.CreditCard, null, tint = Color(account.color))
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {

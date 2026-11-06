@@ -1,5 +1,13 @@
 package ua.moneytracking
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -25,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,7 +109,7 @@ internal fun OverviewScreen(
                     DailySectionHeader("Мої гроші")
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(state.accounts, key = { it.id }) { account ->
-                            Surface(color = Panel, shape = RoundedCornerShape(19.dp), border = BorderStroke(1.dp, DailyBorder)) {
+                            Surface(modifier = Modifier.animateItem(fadeInSpec = tween(160), placementSpec = tween(180), fadeOutSpec = tween(100)), color = Panel, shape = RoundedCornerShape(19.dp), border = BorderStroke(1.dp, DailyBorder)) {
                                 Column(Modifier.widthIn(min = 160.dp, max = 240.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(if (account.cash) Icons.Default.Payments else Icons.Default.CreditCard, null, tint = Color(account.color), modifier = Modifier.size(20.dp))
@@ -119,7 +128,7 @@ internal fun OverviewScreen(
                     DailySectionHeader("Швидка витрата", subtitle = "Оберіть категорію й введіть суму")
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(quickCategories, key = { it.id }) { category ->
-                            Surface(onClick = { onNewEntry("expense", category.id) }, color = Panel, shape = RoundedCornerShape(18.dp)) {
+                            Surface(onClick = { onNewEntry("expense", category.id) }, modifier = Modifier.animateItem(fadeInSpec = tween(160), placementSpec = tween(180), fadeOutSpec = tween(100)), color = Panel, shape = RoundedCornerShape(18.dp)) {
                                 Column(Modifier.width(108.dp).padding(horizontal = 10.dp, vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(9.dp)) {
                                     CategoryBadge(category, Modifier.size(40.dp))
                                     Text(category.name, fontSize = 12.sp, textAlign = TextAlign.Center, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis)
@@ -208,29 +217,33 @@ internal fun TransactionsScreen(
     val closing = accounts.sumOf { balance(it, state.entries.filter { e -> e.time < monthEnd }) }
     val hasFilters = activeAccount != null || activeCategory != null || kind != "all" || search.isNotBlank()
     LazyColumn(verticalArrangement = Arrangement.spacedBy(15.dp), contentPadding = PaddingValues(bottom = 28.dp)) {
-        item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                DailySelect("Рахунок", activeAccount, listOf(null to "Усі рахунки") + state.accounts.map { it.id to it.name }, Modifier.weight(1f)) { accountId = it }
-                Surface(onClick = { expandedFilters = !expandedFilters }, color = if (hasFilters || expandedFilters) Accent.copy(alpha = .12f) else Panel, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, if (hasFilters || expandedFilters) Accent.copy(alpha = .3f) else DailyBorder)) {
-                    Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Tune, "Фільтри історії", Modifier.size(20.dp), tint = if (hasFilters) Accent else Muted)
-                        Text(if (hasFilters) "Активні" else "Фільтри", Modifier.padding(start = 7.dp), fontSize = 13.sp, color = if (hasFilters) Accent else Muted)
+        item(key = "history-filters") {
+            Column {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    DailySelect("Рахунок", activeAccount, listOf(null to "Усі рахунки") + state.accounts.map { it.id to it.name }, Modifier.weight(1f)) { accountId = it }
+                    Surface(onClick = { expandedFilters = !expandedFilters }, color = if (hasFilters || expandedFilters) Accent.copy(alpha = .12f) else Panel, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, if (hasFilters || expandedFilters) Accent.copy(alpha = .3f) else DailyBorder)) {
+                        Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Tune, "Фільтри історії", Modifier.size(20.dp), tint = if (hasFilters) Accent else Muted)
+                            Text(if (hasFilters) "Активні" else "Фільтри", Modifier.padding(start = 7.dp), fontSize = 13.sp, color = if (hasFilters) Accent else Muted)
+                        }
                     }
                 }
-            }
-        }
-        if (expandedFilters) {
-            item {
-                OutlinedTextField(value = search, onValueChange = { search = it.take(100) }, placeholder = { Text("Коментар, категорія або сума") }, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = if (search.isNotBlank()) ({ IconButton(onClick = { search = "" }) { Icon(Icons.Default.Close, "Очистити пошук") } }) else null, singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth())
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    DailySelect("Тип", kind, listOf("all" to "Усі типи", "expense" to "Витрати", "income" to "Доходи", "transfer" to "Перекази"), Modifier.weight(1f)) { kind = it }
-                    DailySelect("Категорія", activeCategory, listOf(null to "Усі категорії") + state.categories.map { it.id to it.name }, Modifier.weight(1f)) { categoryId = it }
+                AnimatedVisibility(
+                    visible = expandedFilters,
+                    enter = expandVertically(tween(180)) + fadeIn(tween(150)),
+                    exit = shrinkVertically(tween(150)) + fadeOut(tween(100))
+                ) {
+                    Column(Modifier.padding(top = 15.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
+                        OutlinedTextField(value = search, onValueChange = { search = it.take(100) }, placeholder = { Text("Коментар, категорія або сума") }, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = if (search.isNotBlank()) ({ IconButton(onClick = { search = "" }) { Icon(Icons.Default.Close, "Очистити пошук") } }) else null, singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth())
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            DailySelect("Тип", kind, listOf("all" to "Усі типи", "expense" to "Витрати", "income" to "Доходи", "transfer" to "Перекази"), Modifier.weight(1f)) { kind = it }
+                            DailySelect("Категорія", activeCategory, listOf(null to "Усі категорії") + state.categories.map { it.id to it.name }, Modifier.weight(1f)) { categoryId = it }
+                        }
+                        AnimatedVisibility(visible = hasFilters, enter = expandVertically(tween(150)) + fadeIn(tween(120)), exit = shrinkVertically(tween(120)) + fadeOut(tween(90))) {
+                            TextButton(onClick = { accountId = null; categoryId = null; kind = "all"; search = "" }) { Icon(Icons.Default.Close, null, Modifier.size(17.dp)); Text("Скинути фільтри", Modifier.padding(start = 6.dp)) }
+                        }
+                    }
                 }
-            }
-            if (hasFilters) item {
-                TextButton(onClick = { accountId = null; categoryId = null; kind = "all"; search = "" }) { Icon(Icons.Default.Close, null, Modifier.size(17.dp)); Text("Скинути фільтри", Modifier.padding(start = 6.dp)) }
             }
         }
         item {
@@ -251,7 +264,7 @@ internal fun TransactionsScreen(
                     if (activeAccount != null) delta(entry, activeAccount)
                     else when (entry.kind) { "expense" -> -entry.amount; "income" -> entry.amount; else -> 0L }
                 }
-                Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.animateItem(fadeInSpec = tween(160), placementSpec = tween(180), fadeOutSpec = tween(100)).fillMaxWidth().padding(top = 8.dp, bottom = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column {
                         Text(date.format(DateTimeFormatter.ofPattern("d MMMM", uk)), fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                         Text(date.format(DateTimeFormatter.ofPattern("EEEE", uk)), fontSize = 12.sp, color = Muted)
@@ -260,7 +273,7 @@ internal fun TransactionsScreen(
                 }
             }
             items(dayEntries, key = { it.id }) { entry ->
-                Surface(color = Panel, shape = RoundedCornerShape(18.dp)) {
+                Surface(modifier = Modifier.animateItem(fadeInSpec = tween(160), placementSpec = tween(180), fadeOutSpec = tween(100)), color = Panel, shape = RoundedCornerShape(18.dp)) {
                     DailyEntryRow(entry, state, onClick = { onEdit(entry) }, onDelete = { onDelete(entry) })
                 }
             }
@@ -281,6 +294,12 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
         val category = state.categories.find { it.id == id }
         DailySpendingGroup(category?.name ?: "Без категорії", entries.sumOf { it.amount }, category?.let { Color(it.color) } ?: Muted)
     }.sortedByDescending { it.amount }
+    // Only chart geometry animates. The underlying sums and labels update immediately.
+    val chartReveal = remember { Animatable(0f) }
+    LaunchedEffect(month, activeAccount, groups, scoped) {
+        chartReveal.snapTo(0f)
+        chartReveal.animateTo(1f, animationSpec = tween(240))
+    }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(22.dp), contentPadding = PaddingValues(bottom = 28.dp)) {
         item { DailySelect("Рахунок", activeAccount, listOf(null to "Усі рахунки") + state.accounts.map { it.id to it.name }) { accountId = it } }
         item {
@@ -305,7 +324,7 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
                             Canvas(Modifier.size(174.dp).padding(13.dp)) {
                                 var start = -90f
                                 groups.forEach { group ->
-                                    val sweep = (group.amount.toDouble() / spending * 360).toFloat()
+                                    val sweep = (group.amount.toDouble() / spending * 360).toFloat() * chartReveal.value
                                     drawArc(group.color, start, sweep, false, style = Stroke(width = 24.dp.toPx(), cap = StrokeCap.Butt))
                                     start += sweep
                                 }
@@ -325,7 +344,7 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
                                         Text("${(group.amount.toDouble() / spending * 100).toInt()}%", color = Muted, fontSize = 11.sp)
                                     }
                                 }
-                                LinearProgressIndicator(progress = { (group.amount.toDouble() / spending).toFloat() }, modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape), color = group.color, trackColor = DailyBorder, drawStopIndicator = {})
+                                LinearProgressIndicator(progress = { (group.amount.toDouble() / spending).toFloat() * chartReveal.value }, modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape), color = group.color, trackColor = DailyBorder, drawStopIndicator = {})
                             }
                         }
                     }
@@ -342,7 +361,7 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
                     Row(Modifier.fillMaxWidth().height(156.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Bottom) {
                         months.forEachIndexed { index, m ->
                             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
-                                Box(Modifier.fillMaxWidth(.65f).height((amounts[index].toDouble() / peak * 110 + 3).dp).clip(RoundedCornerShape(topStart = 7.dp, topEnd = 7.dp)).background(if (index == months.lastIndex) Accent else Color(0xFF355248)))
+                                Box(Modifier.fillMaxWidth(.65f).height((amounts[index].toDouble() / peak * 110 * chartReveal.value + 3).dp).clip(RoundedCornerShape(topStart = 7.dp, topEnd = 7.dp)).background(if (index == months.lastIndex) Accent else Color(0xFF355248)))
                                 Text(m.format(DateTimeFormatter.ofPattern("LLL", uk)), color = if (index == months.lastIndex) Accent else Muted, fontSize = 10.sp, modifier = Modifier.padding(top = 9.dp))
                             }
                         }
@@ -439,6 +458,7 @@ private fun DailyEmpty(title: String, message: String, icon: ImageVector) {
 @Composable
 private fun <T> DailySelect(label: String, value: T, options: List<Pair<T, String>>, modifier: Modifier = Modifier, change: (T) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val arrowRotation by animateFloatAsState(if (expanded) 180f else 0f, animationSpec = tween(150), label = "Report selector arrow")
     Box(modifier) {
         Surface(onClick = { expanded = true }, color = Panel, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, DailyBorder), modifier = Modifier.fillMaxWidth()) {
             Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -446,7 +466,7 @@ private fun <T> DailySelect(label: String, value: T, options: List<Pair<T, Strin
                     Text(label, color = Muted, fontSize = 10.sp)
                     Text(options.firstOrNull { it.first == value }?.second ?: "Оберіть", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Icon(Icons.Default.ExpandMore, null, Modifier.size(18.dp), tint = Muted)
+                Icon(Icons.Default.ExpandMore, null, Modifier.size(18.dp).graphicsLayer { rotationZ = arrowRotation }, tint = Muted)
             }
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.heightIn(max = 320.dp)) {

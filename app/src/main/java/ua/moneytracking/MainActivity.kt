@@ -3,6 +3,12 @@ package ua.moneytracking
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
+import androidx.compose.animation.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -111,6 +117,7 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
     val titles = listOf("Огляд", "Історія", "Аналітика", "Налаштування")
     val icons = listOf(Icons.Default.SpaceDashboard, Icons.AutoMirrored.Filled.ReceiptLong, Icons.Default.BarChart, Icons.Default.Settings)
     val snack = remember { SnackbarHostState() }
+    val screenStates = rememberSaveableStateHolder()
 
     fun startAccount() {
         returnToOverviewAfterAccount = true
@@ -154,10 +161,11 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
         bottomBar = {
             NavigationBar(containerColor = Panel, tonalElevation = 0.dp) {
                 titles.forEachIndexed { index, title ->
+                    val iconScale by animateFloatAsState(if (tab == index) 1.08f else 1f, tween(150), label = "navigationIcon")
                     NavigationBarItem(
                         selected = tab == index,
                         onClick = { tab = index },
-                        icon = { Icon(icons[index], null, Modifier.size(24.dp)) },
+                        icon = { Icon(icons[index], null, Modifier.size(24.dp).graphicsLayer { scaleX = iconScale; scaleY = iconScale }) },
                         label = { Text(title, fontSize = 11.sp, maxLines = 1, fontWeight = if (tab == index) FontWeight.SemiBold else FontWeight.Normal) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Accent, selectedTextColor = Accent,
@@ -172,7 +180,13 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
             Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Мої фінанси", fontSize = 12.sp, color = Muted)
-                    Text(titles[tab], fontSize = 29.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 3.dp))
+                    AnimatedContent(
+                        targetState = titles[tab],
+                        transitionSpec = { (fadeIn(tween(160)) togetherWith fadeOut(tween(80))).using(SizeTransform(clip = false)) },
+                        label = "screenTitle"
+                    ) { title ->
+                        Text(title, fontSize = 29.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 3.dp))
+                    }
                 }
                 if (tab == 0) Box(Modifier.size(44.dp).clip(RoundedCornerShape(15.dp)).background(Panel), contentAlignment = Alignment.Center) {
                     Icon(Icons.Default.AccountBalanceWallet, null, tint = Accent, modifier = Modifier.size(23.dp))
@@ -185,20 +199,33 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
             }
             if (tab != 3) PeriodSelector(month) { monthText = it.toString() }
             if (!state.ready) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Accent) }
-            else when (tab) {
-                0 -> OverviewScreen(state, month, preferences, onNewEntry = ::newEntry, onHistory = { tab = 1 }, onStart = ::startAccount)
-                1 -> TransactionsScreen(state, month, onEdit = { entryId = it.id; entryOpen = true }, onDelete = ::deleteEntry)
-                2 -> InsightsScreen(state, month)
-                3 -> SettingsScreen(
-                    state, preferences,
-                    onPreferencesChange = { preferences = it; savePreferences(context, it) },
-                    onAddAccount = { returnToOverviewAfterAccount = false; accountForm = null; accountOpen = true },
-                    onEditAccount = { accountForm = it; accountOpen = true },
-                    onDeleteAccount = ::deleteAccount,
-                    onAddCategory = { categoryForm = null; categoryOpen = true },
-                    onEditCategory = { categoryForm = it; categoryOpen = true },
-                    onDeleteCategory = ::deleteCategory
-                )
+            else AnimatedContent(
+                targetState = tab,
+                modifier = Modifier.weight(1f),
+                transitionSpec = {
+                    val direction = if (targetState > initialState) 1 else -1
+                    (fadeIn(tween(180)) + slideInHorizontally(tween(200, easing = FastOutSlowInEasing)) { direction * it / 18 }) togetherWith
+                        (fadeOut(tween(90)) + slideOutHorizontally(tween(160)) { -direction * it / 24 }) using SizeTransform(clip = false)
+                },
+                label = "tabTransition"
+            ) { screen ->
+                screenStates.SaveableStateProvider(screen) {
+                    when (screen) {
+                        0 -> OverviewScreen(state, month, preferences, onNewEntry = ::newEntry, onHistory = { tab = 1 }, onStart = ::startAccount)
+                        1 -> TransactionsScreen(state, month, onEdit = { entryId = it.id; entryOpen = true }, onDelete = ::deleteEntry)
+                        2 -> InsightsScreen(state, month)
+                        3 -> SettingsScreen(
+                            state, preferences,
+                            onPreferencesChange = { preferences = it; savePreferences(context, it) },
+                            onAddAccount = { returnToOverviewAfterAccount = false; accountForm = null; accountOpen = true },
+                            onEditAccount = { accountForm = it; accountOpen = true },
+                            onDeleteAccount = ::deleteAccount,
+                            onAddCategory = { categoryForm = null; categoryOpen = true },
+                            onEditCategory = { categoryForm = it; categoryOpen = true },
+                            onDeleteCategory = ::deleteCategory
+                        )
+                    }
+                }
             }
         }
     }
@@ -229,7 +256,17 @@ private fun PeriodSelector(month: YearMonth, change: (YearMonth) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(bottom = 16.dp).clip(RoundedCornerShape(16.dp)).background(Panel), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = { change(month.minusMonths(1)) }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Попередній місяць", tint = Muted) }
         TextButton(onClick = { year = month.year; picker = true }, modifier = Modifier.weight(1f)) {
-            Text(month.format(DateTimeFormatter.ofPattern("LLLL yyyy", uk)).replaceFirstChar { it.titlecase(uk) }, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
+            AnimatedContent(
+                targetState = month,
+                transitionSpec = {
+                    val direction = if (targetState > initialState) 1 else -1
+                    (fadeIn(tween(160)) + slideInVertically(tween(160)) { direction * it / 3 }) togetherWith
+                        (fadeOut(tween(80)) + slideOutVertically(tween(120)) { -direction * it / 3 })
+                },
+                label = "monthTransition"
+            ) { selectedMonth ->
+                Text(selectedMonth.format(DateTimeFormatter.ofPattern("LLLL yyyy", uk)).replaceFirstChar { it.titlecase(uk) }, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
+            }
             Icon(Icons.Default.ExpandMore, null, Modifier.size(17.dp).padding(start = 4.dp), tint = Muted)
         }
         IconButton(onClick = { change(month.plusMonths(1)) }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Наступний місяць", tint = Muted) }
