@@ -5,9 +5,11 @@ import android.content.res.Configuration
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.os.Bundle
+import androidx.activity.SystemBarStyle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -45,17 +47,17 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.max
 
-private val Bg = Color(0xFF101018)
-private val Panel = Color(0xFF1D1D2B)
-private val Muted = Color(0xFFA7A6BB)
-private val Purple = Color(0xFFAA96FF)
-private val Red = Color(0xFFFF7D91)
-private val Green = Color(0xFF55D5AD)
-private val uk = Locale.forLanguageTag("uk-UA")
-private fun Entry.date() = Instant.ofEpochMilli(time).atZone(ZoneId.systemDefault()).toLocalDateTime()
-private fun Entry.inMonth(month: YearMonth) = YearMonth.from(date()) == month
-private fun kindName(kind: String) = when (kind) { "income" -> "Дохід"; "transfer" -> "Переказ"; else -> "Витрата" }
-private fun categoryIcon(i: Int): ImageVector = when (i % 12) {
+internal val Bg = Color(0xFF101419)
+internal val Panel = Color(0xFF191F27)
+internal val Muted = Color(0xFFA8ADB7)
+internal val Accent = Color(0xFFA5CFFF)
+internal val Red = Color(0xFFEE607C)
+internal val Green = Color(0xFF44B794)
+internal val uk = Locale.forLanguageTag("uk-UA")
+internal fun Entry.date() = Instant.ofEpochMilli(time).atZone(ZoneId.systemDefault()).toLocalDateTime()
+internal fun Entry.inMonth(month: YearMonth) = YearMonth.from(date()) == month
+internal fun kindName(kind: String) = when (kind) { "income" -> "Дохід"; "transfer" -> "Переказ"; else -> "Витрата" }
+internal fun categoryIcon(i: Int): ImageVector = when (i % 12) {
     0 -> Icons.Default.Restaurant; 1 -> Icons.Default.LocalCafe; 2 -> Icons.Default.SportsEsports
     3 -> Icons.Default.DirectionsBus; 4 -> Icons.Default.Favorite; 5 -> Icons.Default.Pets
     6 -> Icons.Default.People; 7 -> Icons.Default.Checkroom; 8 -> Icons.Default.Home
@@ -70,9 +72,12 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.rgb(16, 20, 25))
+        )
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Purple, background = Bg, surface = Panel, onSurface = Color(0xFFF4F2FF), secondary = Green, error = Red)) {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Bg, surface = Panel, onSurface = Color(0xFFF4F2FF), secondary = Green, error = Red)) {
                 FinanceApp()
             }
         }
@@ -86,42 +91,69 @@ private fun FinanceApp(model: FinanceModel = viewModel()) {
     var tab by rememberSaveable { mutableIntStateOf(1) }
     var monthText by rememberSaveable { mutableStateOf(YearMonth.now().toString()) }
     val month = YearMonth.parse(monthText)
+    var hidden by rememberSaveable { mutableStateOf(false) }
     var accountForm by remember { mutableStateOf<Account?>(null) }
     var categoryForm by remember { mutableStateOf<Category?>(null) }
     var entryForm by remember { mutableStateOf<Entry?>(null) }
     var accountOpen by remember { mutableStateOf(false) }
     var categoryOpen by remember { mutableStateOf(false) }
     var entryOpen by remember { mutableStateOf(false) }
+    var draftCategory by remember { mutableStateOf<Long?>(null) }
+    var draftKind by remember { mutableStateOf("expense") }
     var selectedCategory by rememberSaveable { mutableStateOf<Long?>(null) }
     var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
-    val names = listOf("Рахунки", "Категорії", "Операції", "Статистика", "Налаштування")
-    val icons = listOf(Icons.Default.AccountBalanceWallet, Icons.Default.GridView, Icons.AutoMirrored.Filled.ReceiptLong, Icons.Default.PieChart, Icons.Default.Settings)
+    var menuOpen by remember { mutableStateOf(false) }
+    val names = listOf("Рахунки", "Категорії", "Операції", "Статистика", "Більше")
+    val icons = listOf(Icons.Default.AccountBalanceWallet, Icons.Default.Category, Icons.AutoMirrored.Filled.ReceiptLong, Icons.Default.BarChart, Icons.Default.Apps)
     val snack = remember { SnackbarHostState() }
+    fun newEntry(category: Long? = null, kind: String = "expense") {
+        entryForm = null; draftCategory = category; draftKind = kind; entryOpen = true
+    }
     LaunchedEffect(error) { error?.let { snack.showSnackbar(it); model.error.value = null } }
     Scaffold(containerColor = Bg, snackbarHost = { SnackbarHost(snack) }, bottomBar = {
-        NavigationBar(containerColor = Panel) {
-            names.forEachIndexed { i, title -> NavigationBarItem(selected = tab == i, onClick = { tab = i; selectedCategory = null }, icon = { Icon(icons[i], title) }, label = { Text(title, fontSize = 9.sp, maxLines = 1) }) }
+        NavigationBar(containerColor = Color(0xFF242E3B), tonalElevation = 0.dp) {
+            names.forEachIndexed { i, title -> NavigationBarItem(
+                selected = tab == i, onClick = { tab = i; selectedCategory = null },
+                icon = { Icon(icons[i], title, Modifier.size(27.dp)) },
+                label = { Text(title, fontSize = 11.sp, maxLines = 1, fontWeight = if (tab == i) FontWeight.Bold else FontWeight.Normal) },
+                colors = NavigationBarItemDefaults.colors(selectedIconColor = Accent, selectedTextColor = Accent, indicatorColor = Color(0xFF3B4A5D), unselectedIconColor = Muted, unselectedTextColor = Muted)
+            ) }
         }
     }, floatingActionButton = {
-        if (tab != 4) FloatingActionButton(onClick = {
-            when (tab) { 0 -> { accountForm = null; accountOpen = true }; else -> { entryForm = null; entryOpen = true } }
-        }, containerColor = Purple, contentColor = Bg) { Icon(Icons.Default.Add, if (tab == 0) "Додати рахунок" else "Додати операцію") }
+        if (tab != 4 && state.ready) ExtendedFloatingActionButton(
+            onClick = { if (tab == 0) { accountForm = null; accountOpen = true } else newEntry() },
+            icon = { Icon(Icons.Default.Add, null) }, text = { Text("Додати", fontWeight = FontWeight.SemiBold) },
+            containerColor = Color(0xFF12577F), contentColor = Color(0xFFC6E6FF), shape = RoundedCornerShape(22.dp)
+        )
     }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 18.dp)) {
-            Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("МОЇ ФІНАНСИ", color = Muted, fontSize = 10.sp, letterSpacing = 2.sp)
-                    Text(names[tab], fontSize = 27.sp, fontWeight = FontWeight.Bold)
+        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+            if (tab != 4) {
+                Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 38.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Загальний баланс", color = Muted, fontSize = 14.sp)
+                            IconButton(onClick = { hidden = !hidden }, modifier = Modifier.size(40.dp)) { Icon(if (hidden) Icons.Default.VisibilityOff else Icons.Default.Visibility, if (hidden) "Показати баланс" else "Приховати баланс", Modifier.size(19.dp), tint = Muted) }
+                        }
+                        Text(if (hidden) "•••• грн" else compactMoney(state.accounts.sumOf { balance(it, state.entries) }), fontSize = 32.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    }
+                    Box(Modifier.align(Alignment.CenterEnd)) {
+                        IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "Дії", tint = Muted) }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(text = { Text("Додати рахунок") }, onClick = { menuOpen = false; accountForm = null; accountOpen = true })
+                            DropdownMenuItem(text = { Text("Додати категорію") }, onClick = { menuOpen = false; categoryForm = null; categoryOpen = true })
+                            DropdownMenuItem(text = { Text("Поточний місяць") }, onClick = { menuOpen = false; monthText = YearMonth.now().toString() })
+                        }
+                    }
                 }
-                Icon(Icons.Default.AccountBalanceWallet, null, tint = Purple, modifier = Modifier.size(28.dp))
-            }
-            if (tab in 1..3) MonthPicker(month) { monthText = it.toString() }
+                if (tab in 1..3) MonthPicker(month) { monthText = it.toString() }
+                else Text("Мої рахунки", color = Muted, modifier = Modifier.padding(vertical = 16.dp))
+            } else Text("Налаштування", fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 22.dp))
             if (!state.ready) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             else when (tab) {
                 0 -> AccountScreen(state, onEdit = { accountForm = it; accountOpen = true }, onDelete = { a ->
                     confirm = "Видалити «${a.name}» та всі пов’язані операції? Перекази теж буде видалено; баланси інших рахунків перерахуються." to { model.delete(a) }
                 }, onAdd = { accountForm = null; accountOpen = true })
-                1 -> CategoryScreen(state, month, onOpen = { selectedCategory = it.id; tab = 2 }, onEdit = { categoryForm = it; categoryOpen = true }, onAdd = { categoryForm = null; categoryOpen = true })
+                1 -> CategoryScreen(state, month, onOpen = { selectedCategory = it.id; tab = 2 }, onQuickAdd = { c, kind -> newEntry(c.id, kind) }, onEdit = { categoryForm = it; categoryOpen = true }, onAdd = { categoryForm = null; categoryOpen = true })
                 2 -> HistoryScreen(state, month, selectedCategory, onClearCategory = { selectedCategory = null }, onEdit = { entryForm = it; entryOpen = true }, onDelete = { e -> confirm = "Видалити операцію? Баланси будуть перераховані." to { model.delete(e) } })
                 3 -> StatisticsScreen(state, month)
                 4 -> SettingsScreen()
@@ -132,24 +164,33 @@ private fun FinanceApp(model: FinanceModel = viewModel()) {
     if (categoryOpen) CategoryForm(categoryForm, { categoryOpen = false }, onDelete = categoryForm?.let { c -> { confirm = "Видалити категорію «${c.name}»? Операції залишаться без категорії." to { model.delete(c); categoryOpen = false } } }) { model.save(it); categoryOpen = false }
     if (entryOpen) {
         if (state.accounts.isEmpty()) AlertDialog(onDismissRequest = { entryOpen = false }, title = { Text("Спочатку додайте рахунок") }, text = { Text("Створіть картку або готівковий рахунок для першої операції.") }, confirmButton = { TextButton(onClick = { entryOpen = false; accountForm = null; accountOpen = true }) { Text("Створити рахунок") } }, dismissButton = { TextButton(onClick = { entryOpen = false }) { Text("Закрити") } })
-        else EntryForm(entryForm, state, { entryOpen = false }) { model.save(it); entryOpen = false }
+        else EntrySheet(entryForm, state, draftCategory, draftKind, { entryOpen = false }, onDelete = entryForm?.let { e -> { confirm = "Видалити операцію? Баланси будуть перераховані." to { model.delete(e); entryOpen = false } } }) { model.save(it); entryOpen = false }
     }
     confirm?.let { (message, action) -> AlertDialog(onDismissRequest = { confirm = null }, title = { Text("Підтвердіть видалення") }, text = { Text(message) }, confirmButton = { TextButton(onClick = { action(); confirm = null }) { Text("Видалити", color = Red) } }, dismissButton = { TextButton(onClick = { confirm = null }) { Text("Скасувати") } }) }
 }
 
 @Composable private fun MonthPicker(month: YearMonth, change: (YearMonth) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+    var picker by remember { mutableStateOf(false) }
+    var year by remember(month) { mutableIntStateOf(month.year) }
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
         IconButton(onClick = { change(month.minusMonths(1)) }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Попередній місяць") }
-        Text(month.format(DateTimeFormatter.ofPattern("LLLL yyyy", uk)).replaceFirstChar { it.titlecase(uk) }, fontWeight = FontWeight.Medium)
+        TextButton(onClick = { year = month.year; picker = true }) {
+            Text(month.format(DateTimeFormatter.ofPattern("LLLL yyyy", uk)).replaceFirstChar { it.titlecase(uk) }, fontWeight = FontWeight.Medium, fontSize = 19.sp, color = MaterialTheme.colorScheme.onSurface)
+            Icon(Icons.Default.ArrowDropDown, null, tint = Muted)
+        }
         IconButton(onClick = { change(month.plusMonths(1)) }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Наступний місяць") }
     }
+    if (picker) AlertDialog(onDismissRequest = { picker = false }, title = { Row(verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = { year-- }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Попередній рік") }
+        Text("$year", Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        IconButton(onClick = { year++ }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Наступний рік") }
+    } }, text = { Column { (1..12).chunked(3).forEach { row -> Row {
+        row.forEach { m -> TextButton(onClick = { change(YearMonth.of(year, m)); picker = false }, modifier = Modifier.weight(1f)) { Text(YearMonth.of(year, m).format(DateTimeFormatter.ofPattern("LLL", uk))) } }
+    } } } }, confirmButton = { TextButton(onClick = { change(YearMonth.now()); picker = false }) { Text("Поточний місяць") } })
 }
 @Composable private fun Empty(text: String) { Text(text, color = Muted, modifier = Modifier.padding(vertical = 28.dp), lineHeight = 24.sp) }
 @Composable private fun Block(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) { Column(modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Panel).padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content) }
 @Composable private fun Total(label: String, value: Long, color: Color = Color.White) { Column { Text(label, color = Muted, fontSize = 12.sp); Text(money(value), color = color, fontWeight = FontWeight.Bold, fontSize = 18.sp) } }
-@Composable private fun BalanceCard(state: FinanceState) {
-    Block { Text("Загальний баланс", color = Muted); Text(money(state.accounts.sumOf { balance(it, state.entries) }), fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White); Text("Усі рахунки · актуальний стан", color = Muted, fontSize = 12.sp) }
-}
 @Composable private fun MonthlyTotals(entries: List<Entry>) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Block(Modifier.weight(1f)) { Total("↓ Витрати", entries.filter { it.kind == "expense" }.sumOf { it.amount }, Red) }
@@ -158,7 +199,6 @@ private fun FinanceApp(model: FinanceModel = viewModel()) {
 }
 @Composable private fun AccountScreen(state: FinanceState, onEdit: (Account) -> Unit, onDelete: (Account) -> Unit, onAdd: () -> Unit) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 100.dp)) {
-        item { BalanceCard(state) }
         if (state.accounts.isEmpty()) item { Empty("Додайте перший рахунок — картку або готівку. Початковий баланс не враховується як дохід."); Button(onClick = onAdd) { Text("Створити рахунок") } }
         items(state.accounts, key = { it.id }) { a ->
             Block {
@@ -175,30 +215,59 @@ private fun FinanceApp(model: FinanceModel = viewModel()) {
         }
     }
 }
-@Composable private fun CategoryScreen(state: FinanceState, month: YearMonth, onOpen: (Category) -> Unit, onEdit: (Category) -> Unit, onAdd: () -> Unit) {
+@Composable private fun CategoryScreen(state: FinanceState, month: YearMonth, onOpen: (Category) -> Unit, onQuickAdd: (Category, String) -> Unit, onEdit: (Category) -> Unit, onAdd: () -> Unit) {
     val entries = state.entries.filter { it.inMonth(month) }
+    var kind by rememberSaveable { mutableStateOf("expense") }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 100.dp)) {
-        item { BalanceCard(state) }
-        item { MonthlyTotals(entries) }
-        item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("Витрати за категоріями", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)); IconButton(onClick = onAdd) { Icon(Icons.Default.Add, "Додати категорію", tint = Purple) } } }
+        item {
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Panel).padding(8.dp)) {
+                listOf("expense", "income").forEach { type ->
+                    Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(if (kind == type) Bg else Color.Transparent).clickable { kind = type }.padding(vertical = 17.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (type == "expense") "Витрати" else "Доходи", color = if (kind == type) MaterialTheme.colorScheme.onSurface else Muted, fontSize = 14.sp)
+                        Spacer(Modifier.height(6.dp))
+                        Text(compactMoney(entries.filter { it.kind == type }.sumOf { it.amount }), color = if (type == "expense") Red else Green, fontSize = 24.sp)
+                    }
+                }
+            }
+        }
+        item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("Категорії · торкніться, щоб додати", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f)); IconButton(onClick = onAdd) { Icon(Icons.Default.Add, "Додати категорію", tint = Accent) } } }
         items(state.categories.chunked(2)) { pair ->
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 pair.forEach { c ->
-                    Block(Modifier.weight(1f).clickable { onOpen(c) }) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(44.dp).clip(CircleShape).background(Color(c.color).copy(alpha = .18f)), contentAlignment = Alignment.Center) { Icon(categoryIcon(c.icon), null, tint = Color(c.color)) }
-                            IconButton(onClick = { onEdit(c) }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Edit, "Редагувати ${c.name}", Modifier.size(16.dp), tint = Muted) }
+                    var menu by remember { mutableStateOf(false) }
+                    Surface(onClick = { onQuickAdd(c, kind) }, modifier = Modifier.weight(1f), color = Bg, border = BorderStroke(1.dp, Color(0xFF30353C)), shape = RoundedCornerShape(16.dp)) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CategoryBadge(c, Modifier.size(40.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(c.name, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                                Text(compactMoney(entries.filter { it.kind == kind && it.categoryId == c.id }.sumOf { it.amount }), modifier = Modifier.weight(1f), fontSize = 16.sp, maxLines = 1)
+                                Box {
+                                    IconButton(onClick = { menu = true }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.MoreHoriz, "Дії: ${c.name}", Modifier.size(18.dp), tint = Muted) }
+                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                        DropdownMenuItem(text = { Text("Додати операцію") }, onClick = { menu = false; onQuickAdd(c, kind) })
+                                        DropdownMenuItem(text = { Text("Історія категорії") }, onClick = { menu = false; onOpen(c) })
+                                        DropdownMenuItem(text = { Text("Редагувати категорію") }, onClick = { menu = false; onEdit(c) })
+                                    }
+                                }
+                            }
                         }
-                        Text(c.name, maxLines = 2, minLines = 2, fontSize = 13.sp, color = Muted)
-                        Text(money(entries.filter { it.kind == "expense" && it.categoryId == c.id }.sumOf { it.amount }), fontSize = 17.sp, fontWeight = FontWeight.Bold)
                     }
                 }
                 if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
-        if (entries.isEmpty()) item { Empty("Цього місяця ще немає операцій. Натисніть +, щоб додати першу.") }
-        val uncategorized = entries.filter { it.kind == "expense" && it.categoryId == null }.sumOf { it.amount }
-        if (uncategorized != 0L) item { Block { Total("Без категорії", uncategorized, Red) } }
+        if (entries.isEmpty()) item { Empty("Ще немає операцій. Оберіть категорію або натисніть «Додати».") }
+        val uncategorized = entries.filter { it.kind == kind && it.categoryId == null }.sumOf { it.amount }
+        if (uncategorized != 0L) item { Block { Total("Без категорії", uncategorized, if (kind == "expense") Red else Green) } }
+    }
+}
+@Composable internal fun CategoryBadge(category: Category?, modifier: Modifier = Modifier) {
+    val color = category?.let { Color(it.color) } ?: Accent
+    Box(modifier.clip(RoundedCornerShape(12.dp)).background(color.copy(alpha = .13f)), contentAlignment = Alignment.Center) {
+        Icon(category?.let { categoryIcon(it.icon) } ?: Icons.Default.SwapHoriz, null, tint = color, modifier = Modifier.size(26.dp))
     }
 }
 
@@ -212,28 +281,68 @@ private fun FinanceApp(model: FinanceModel = viewModel()) {
 @Composable private fun HistoryScreen(state: FinanceState, month: YearMonth, category: Long?, onClearCategory: () -> Unit, onEdit: (Entry) -> Unit, onDelete: (Entry) -> Unit) {
     var account by rememberSaveable { mutableStateOf<Long?>(null) }
     var kind by rememberSaveable { mutableStateOf("all") }
+    var filters by rememberSaveable { mutableStateOf(false) }
     val list = state.entries.filter { it.inMonth(month) && (account == null || it.accountId == account || it.targetId == account) && (kind == "all" || it.kind == kind) && (category == null || it.categoryId == category) }
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 100.dp)) {
-        item { Choice("Рахунок", account, listOf(null to "Усі") + state.accounts.map { it.id to it.name }) { account = it } }
-        item { Choice("Тип", kind, listOf("all" to "Усі", "expense" to "Витрати", "income" to "Доходи", "transfer" to "Перекази")) { kind = it } }
+    val start = month.atDay(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val end = month.plusMonths(1).atDay(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val accounts = state.accounts.filter { account == null || it.id == account }
+    val opening = accounts.sumOf { balance(it, state.entries.filter { e -> e.time < start }) }
+    val closing = accounts.sumOf { balance(it, state.entries.filter { e -> e.time < end }) }
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 110.dp)) {
+        item {
+            Surface(color = Bg, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, Color(0xFF42474F))) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                    listOf("Початковий баланс" to opening, "Кінцевий баланс" to closing).forEach { (label, value) ->
+                        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) { Text(label, color = Muted, fontSize = 12.sp); Text(compactMoney(value), color = Green, fontSize = 19.sp, modifier = Modifier.padding(top = 4.dp)) }
+                    }
+                }
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (account == null) "Усі рахунки" else state.accounts.find { it.id == account }?.name.orEmpty(), color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                TextButton(onClick = { filters = !filters }) { Icon(Icons.Default.FilterList, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text(if (filters) "Згорнути" else "Фільтри" + if (account != null || kind != "all") " •" else "", fontSize = 12.sp) }
+            }
+        }
+        if (filters) {
+            item { Choice("Рахунок", account, listOf(null to "Усі") + state.accounts.map { it.id to it.name }) { account = it } }
+            item { Choice("Тип", kind, listOf("all" to "Усі", "expense" to "Витрати", "income" to "Доходи", "transfer" to "Перекази")) { kind = it } }
+        }
         if (category != null) item { TextButton(onClick = onClearCategory) { Text("${state.categories.find { it.id == category }?.name ?: "Категорія"} × Скинути") } }
-        if (list.isEmpty()) item { Empty("Операцій за цими фільтрами немає.") }
+        if (list.isEmpty()) item { Empty("Операцій за цей місяць немає. Додайте першу або змініть фільтри.") }
         list.groupBy { it.date().toLocalDate() }.forEach { (date, entries) ->
-            item { Text(date.format(DateTimeFormatter.ofPattern("d MMMM yyyy", uk)), color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp)) }
+            val dayNet = entries.sumOf { if (account != null) delta(it, account!!) else when (it.kind) { "income" -> it.amount; "expense" -> -it.amount; else -> 0L } }
+            item {
+                Column(Modifier.padding(top = 18.dp, bottom = 4.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(date.dayOfMonth.toString(), fontSize = 28.sp)
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(date.format(DateTimeFormatter.ofPattern("EEEE", uk)), fontSize = 14.sp); Text(date.format(DateTimeFormatter.ofPattern("LLLL yyyy", uk)), fontSize = 13.sp, color = Muted) }
+                        Text((if (dayNet > 0) "+" else "") + compactMoney(dayNet), color = if (dayNet < 0) Red else if (dayNet > 0) Green else Muted, fontSize = 18.sp)
+                    }
+                    HorizontalDivider(Modifier.padding(top = 14.dp), color = Color(0xFF353C44))
+                }
+            }
             items(entries, key = { it.id }) { e ->
                 val c = state.categories.find { it.id == e.categoryId }
-                Block(Modifier.clickable { onEdit(e) }) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (e.kind == "transfer") Icons.Default.SwapHoriz else c?.let { categoryIcon(it.icon) } ?: Icons.Default.Payments, null, tint = c?.let { Color(it.color) } ?: Purple)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(if (e.kind == "transfer") "Переказ" else c?.name ?: kindName(e.kind), fontWeight = FontWeight.Medium)
-                            Text((state.accounts.find { it.id == e.accountId }?.name ?: "Рахунок") + if (e.targetId != null) " → ${state.accounts.find { it.id == e.targetId }?.name.orEmpty()}" else "", color = Muted, fontSize = 12.sp)
+                var actions by remember { mutableStateOf(false) }
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onEdit(e) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CategoryBadge(if (e.kind == "transfer") null else c, Modifier.size(52.dp))
+                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                        Text(if (e.kind == "transfer") "Переказ" else c?.name ?: kindName(e.kind), fontSize = 17.sp)
+                        Row(Modifier.padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CreditCard, null, Modifier.size(19.dp), tint = Muted)
+                            Text((state.accounts.find { it.id == e.accountId }?.name ?: "Рахунок") + if (e.targetId != null) " → ${state.accounts.find { it.id == e.targetId }?.name.orEmpty()}" else "", modifier = Modifier.padding(start = 5.dp), color = Muted, fontSize = 13.sp, maxLines = 2)
                         }
-                        Text((when (e.kind) { "expense" -> "−"; "income" -> "+"; else -> "" }) + money(e.amount), color = when (e.kind) { "expense" -> Red; "income" -> Green; else -> Purple }, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        IconButton(onClick = { onDelete(e) }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.DeleteOutline, "Видалити операцію", Modifier.size(18.dp), tint = Muted) }
+                        if (e.note.isNotBlank()) Text(e.note, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
                     }
-                    Text(e.date().format(DateTimeFormatter.ofPattern("HH:mm")) + if (e.note.isNotBlank()) " · ${e.note}" else "", color = Muted, fontSize = 12.sp)
+                    Text(compactMoney(e.amount), color = when (e.kind) { "expense" -> Red; "income" -> Green; else -> Accent }, fontSize = 17.sp)
+                    Box {
+                        IconButton(onClick = { actions = true }, modifier = Modifier.width(32.dp)) { Icon(Icons.Default.MoreVert, "Дії з операцією", tint = Muted, modifier = Modifier.size(18.dp)) }
+                        DropdownMenu(expanded = actions, onDismissRequest = { actions = false }) {
+                            DropdownMenuItem(text = { Text("Редагувати") }, onClick = { actions = false; onEdit(e) })
+                            DropdownMenuItem(text = { Text("Видалити", color = Red) }, onClick = { actions = false; onDelete(e) })
+                        }
+                    }
                 }
             }
         }
@@ -250,7 +359,7 @@ private fun FinanceApp(model: FinanceModel = viewModel()) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 100.dp)) {
         item { Choice("Рахунок", account, listOf(null to "Усі") + state.accounts.map { it.id to it.name }) { account = it } }
         item { MonthlyTotals(entries) }
-        item { Block { Total("Різниця доходів і витрат", entries.filter { it.kind == "income" }.sumOf { it.amount } - total, Purple); Text("Власні перекази не входять у статистику.", color = Muted, fontSize = 12.sp) } }
+        item { Block { Total("Різниця доходів і витрат", entries.filter { it.kind == "income" }.sumOf { it.amount } - total, Accent); Text("Власні перекази не входять у статистику.", color = Muted, fontSize = 12.sp) } }
         item {
             Block {
                 Text("Структура витрат", fontWeight = FontWeight.Bold)
@@ -275,7 +384,7 @@ private fun FinanceApp(model: FinanceModel = viewModel()) {
                 Text("Витрати за 6 місяців", fontWeight = FontWeight.Bold)
                 Row(Modifier.fillMaxWidth().height(145.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
                     months.forEachIndexed { i, m -> Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
-                        Box(Modifier.width(22.dp).height((sums[i].toDouble() / peak * 105 + 2).dp).clip(RoundedCornerShape(6.dp)).background(if (i == 5) Purple else Color(0xFF4F476E)))
+                        Box(Modifier.width(22.dp).height((sums[i].toDouble() / peak * 105 + 2).dp).clip(RoundedCornerShape(6.dp)).background(if (i == 5) Accent else Color(0xFF4F476E)))
                         Text(m.format(DateTimeFormatter.ofPattern("LLL", uk)), fontSize = 10.sp, color = Muted)
                     } }
                 }
@@ -286,7 +395,7 @@ private fun FinanceApp(model: FinanceModel = viewModel()) {
 }
 @Composable private fun SettingsScreen() {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { Block { Icon(Icons.Default.AccountBalanceWallet, null, tint = Purple); Text("Мої Фінанси", fontWeight = FontWeight.Bold, fontSize = 22.sp); Text("Версія 1.0 · Українська · UAH (грн)", color = Muted) } }
+        item { Block { Icon(Icons.Default.AccountBalanceWallet, null, tint = Accent); Text("Мої Фінанси", fontWeight = FontWeight.Bold, fontSize = 22.sp); Text("Версія 1.1 · Українська · UAH (грн)", color = Muted) } }
         item { Block { Text("Ваші дані — на вашому пристрої", fontWeight = FontWeight.Bold); Text("Застосунок працює повністю офлайн. Немає сервера, реклами, реєстрації чи банківських інтеграцій. Не вводьте повний номер картки, CVV або паролі.", color = Muted, lineHeight = 23.sp) } }
         item { Block { Text("Як рахується баланс", fontWeight = FontWeight.Bold); Text("Початковий залишок + доходи − витрати + вхідні перекази − вихідні перекази. Зміна або видалення операції одразу оновлює підсумки. Коригування балансу змінює початковий залишок, а не статистику доходів.", color = Muted, lineHeight = 23.sp) } }
         item { Block { Text("Локальне зберігання", fontWeight = FontWeight.Bold); Text("Room зберігає записи після закриття програми та перезапуску телефона. Видалення застосунку або очищення його даних видаляє всю історію. Автоматичного резервного копіювання немає.", color = Muted, lineHeight = 23.sp) } }
@@ -308,7 +417,7 @@ private fun FinanceApp(model: FinanceModel = viewModel()) {
         }
     }
 }
-@Composable private fun Field(label: String, value: String, money: Boolean = false, onChange: (String) -> Unit) {
+@Composable internal fun Field(label: String, value: String, money: Boolean = false, onChange: (String) -> Unit) {
     OutlinedTextField(value = value, onValueChange = onChange, label = { Text(label) }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(12.dp), keyboardOptions = KeyboardOptions(keyboardType = if (money) KeyboardType.Decimal else KeyboardType.Text))
 }
 @Composable private fun Colors(value: Long, select: (Long) -> Unit) {
@@ -350,34 +459,5 @@ private fun FinanceApp(model: FinanceModel = viewModel()) {
         (0..11).chunked(4).forEach { row -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { row.forEach { i -> IconButton(onClick = { icon = i }, modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(if (i == icon) Color(color).copy(alpha = .25f) else Color.Transparent)) { Icon(categoryIcon(i), defaultNames[i], tint = if (i == icon) Color(color) else Muted) } } } }
         if (error) Text("Введіть назву категорії", color = Red)
         if (onDelete != null) TextButton(onClick = onDelete) { Text("Видалити категорію", color = Red) }
-    }
-}
-@Composable private fun EntryForm(original: Entry?, state: FinanceState, dismiss: () -> Unit, save: (Entry) -> Unit) {
-    var kind by remember { mutableStateOf(original?.kind ?: "expense") }
-    var amount by remember { mutableStateOf(original?.let { editableMoney(it.amount) }.orEmpty()) }
-    var account by remember { mutableLongStateOf(original?.accountId ?: state.accounts.first().id) }
-    var target by remember { mutableStateOf(original?.targetId ?: state.accounts.firstOrNull { it.id != account }?.id) }
-    var category by remember { mutableStateOf(original?.categoryId ?: state.categories.firstOrNull()?.id) }
-    var date by remember { mutableStateOf(original?.date() ?: LocalDateTime.now()) }
-    var note by remember { mutableStateOf(original?.note.orEmpty()) }
-    var error by remember { mutableStateOf("") }
-    val context = LocalContext.current
-    EditDialog(if (original == null) "Нова операція" else "Редагувати операцію", dismiss, {
-        val value = parseMoney(amount)
-        if (value == null || value <= 0) error = "Введіть суму більше нуля, не більше двох знаків після коми."
-        else if (kind == "transfer" && (target == null || target == account)) error = "Оберіть два різні рахунки. Для переказу створіть щонайменше два рахунки."
-        else save(Entry(original?.id ?: 0, kind, value, account, if (kind == "transfer") target else null, if (kind == "transfer") null else category, date.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(), note.trim()))
-    }) {
-        Choice("Тип", kind, listOf("expense" to "Витрата", "income" to "Дохід", "transfer" to "Переказ")) { kind = it }
-        Field("Сума, грн", amount, true) { amount = it }
-        Choice(if (kind == "transfer") "З рахунку" else "Рахунок", account, state.accounts.map { it.id to it.name }) { account = it; if (target == account) target = state.accounts.firstOrNull { a -> a.id != account }?.id }
-        if (kind == "transfer") {
-            Choice("На рахунок", target, state.accounts.filter { it.id != account }.map { it.id as Long? to it.name }) { target = it }
-            Text("Переказ не впливає на загальні доходи та витрати.", color = Muted, fontSize = 12.sp)
-        } else Choice("Категорія", category, listOf(null to "Без категорії") + state.categories.map { it.id to it.name }) { category = it }
-        OutlinedButton(onClick = { DatePickerDialog(context, { _, y, m, d -> date = date.withYear(y).withMonth(1).withDayOfMonth(1).withMonth(m + 1).withDayOfMonth(d) }, date.year, date.monthValue - 1, date.dayOfMonth).show() }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.CalendarMonth, null); Spacer(Modifier.width(8.dp)); Text(date.format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))) }
-        OutlinedButton(onClick = { TimePickerDialog(context, { _, h, m -> date = date.withHour(h).withMinute(m) }, date.hour, date.minute, true).show() }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Schedule, null); Spacer(Modifier.width(8.dp)); Text(date.format(DateTimeFormatter.ofPattern("HH:mm"))) }
-        Field("Коментар (необов’язково)", note) { note = it.take(500) }
-        if (error.isNotBlank()) Text(error, color = Red, fontSize = 12.sp)
     }
 }

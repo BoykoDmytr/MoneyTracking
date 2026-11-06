@@ -20,4 +20,21 @@ class MoneyTest {
         assertEquals(80000L, balance(a, listOf(transfer)))
         assertEquals(100000L, balance(a, emptyList()))
     }
+    @Test fun keypadUsesExactDecimalArithmeticAndLimitsPrecision() {
+        var input = ""
+        listOf("0", ",", "1", "+", "0", ",", "2").forEach { input = AmountInput.key(input, it) }
+        assertEquals(30L, AmountInput.evaluate(input))
+        assertEquals(125050L, AmountInput.evaluate("1250,50"))
+        assertEquals(333L, AmountInput.evaluate("10÷3"))
+        assertNull(AmountInput.evaluate("10÷0"))
+        assertNull(AmountInput.evaluate("10+"))
+        assertEquals("1,23", AmountInput.key("1,23", "4"))
+        assertEquals("1,2", AmountInput.key("1,23", "⌫"))
+        assertEquals("", AmountInput.key("1,23", "C"))
+        assertEquals("0,", AmountInput.key("", ","))
+        assertEquals("0,50", AmountInput.key("0,50", ","))
+        assertEquals("5×", AmountInput.key("2+3", "×"))
+        assertEquals("637 грн", compactMoney(63700))
+        assertEquals("637,50 грн", compactMoney(63750))
+    }
 }
