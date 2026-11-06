@@ -3,7 +3,6 @@ package ua.moneytracking
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,8 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -24,11 +22,12 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -41,135 +40,220 @@ import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun EntrySheet(original: Entry?, state: FinanceState, initialCategory: Long?, initialKind: String, dismiss: () -> Unit, onDelete: (() -> Unit)?, save: (Entry) -> Unit) {
-    var kind by rememberSaveable { mutableStateOf(original?.kind ?: initialKind) }
+internal fun EntrySheet(
+    original: Entry?,
+    state: FinanceState,
+    initialCategory: Long?,
+    initialKind: String,
+    preferences: UserPreferences,
+    dismiss: () -> Unit,
+    onDelete: (() -> Unit)?,
+    save: (Entry) -> Unit
+) {
+    if (state.accounts.isEmpty()) return
+    val defaultAccount = state.accounts.find { it.id == preferences.defaultAccountId } ?: state.accounts.first()
+    var kind by rememberSaveable { mutableStateOf(original?.kind ?: initialKind.takeIf { it in listOf("expense", "income", "transfer") } ?: "expense") }
     var expression by rememberSaveable { mutableStateOf(original?.let { editableMoney(it.amount) }.orEmpty()) }
-    var account by rememberSaveable { mutableLongStateOf(original?.accountId ?: state.accounts.first().id) }
+    var replaceAmount by rememberSaveable { mutableStateOf(original != null) }
+    var account by rememberSaveable { mutableLongStateOf(original?.accountId ?: defaultAccount.id) }
     var target by rememberSaveable { mutableStateOf(original?.targetId ?: state.accounts.firstOrNull { it.id != account }?.id) }
     var category by rememberSaveable { mutableStateOf(if (original != null) original.categoryId else initialCategory ?: state.categories.firstOrNull()?.id) }
     var timestamp by rememberSaveable { mutableLongStateOf(original?.time ?: System.currentTimeMillis()) }
-    val date = Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDateTime()
-    fun setDate(value: LocalDateTime) { timestamp = value.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli() }
     var note by rememberSaveable { mutableStateOf(original?.note.orEmpty()) }
     var error by rememberSaveable { mutableStateOf("") }
+    var details by rememberSaveable { mutableStateOf(false) }
+    var calculator by rememberSaveable { mutableStateOf(false) }
     var accountPicker by remember { mutableStateOf(false) }
     var categoryPicker by remember { mutableStateOf(false) }
     var notePicker by remember { mutableStateOf(false) }
     var noteDraft by rememberSaveable { mutableStateOf(note) }
-    val context = LocalContext.current
-    val screenHeight = LocalConfiguration.current.screenHeightDp
-    val keyHeight = ((screenHeight - 560) / 4).coerceIn(48, 78).dp
+    val date = Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDateTime()
     val selectedAccount = state.accounts.find { it.id == account }
     val selectedCategory = state.categories.find { it.id == category }
     val transfer = kind == "transfer"
-    fun timePicker() { TimePickerDialog(context, { _, h, m -> setDate(date.withHour(h).withMinute(m)) }, date.hour, date.minute, true).show() }
-    fun submit() {
-        val value = AmountInput.evaluate(expression)
-        if (value == null || value <= 0) error = "Введіть суму більше нуля. Перевірте обчислення."
-        else if (transfer && (target == null || target == account)) error = "Для переказу потрібні два різні рахунки."
-        else save(Entry(original?.id ?: 0, kind, value, account, if (transfer) target else null, if (transfer) null else category, timestamp, note.trim()))
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+    val screenHeight = LocalConfiguration.current.screenHeightDp
+    val keyHeight = if (screenHeight < 720) 48.dp else if (screenHeight < 860) 56.dp else 64.dp
+    val evaluated = AmountInput.evaluate(expression)
+    val validTransfer = !transfer || (target != null && target != account)
+    val canSave = evaluated != null && evaluated > 0 && validTransfer && selectedAccount != null
+    val saveLabel = if (original != null) "Зберегти зміни" else when (kind) {
+        "income" -> "Додати дохід"
+        "transfer" -> "Переказати"
+        else -> "Додати витрату"
     }
-    ModalBottomSheet(onDismissRequest = dismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Panel, contentColor = MaterialTheme.colorScheme.onSurface, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
-        Column(Modifier.fillMaxWidth().heightIn(max = (screenHeight * .92).dp).verticalScroll(rememberScrollState()).padding(horizontal = 12.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                listOf("expense", "income", "transfer").forEach { type ->
-                    val color = when (type) { "expense" -> Red; "income" -> Green; else -> Accent }
-                    TextButton(onClick = { kind = type; error = "" }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColors(contentColor = if (kind == type) color else Muted), contentPadding = PaddingValues(horizontal = 4.dp)) {
-                        Text(kindName(type), fontWeight = if (kind == type) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
+    fun setDate(value: LocalDateTime) {
+        timestamp = value.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    }
+    fun press(key: String) {
+        if (preferences.haptics) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        val base = if (replaceAmount && (key.firstOrNull()?.isDigit() == true || key == ",")) "" else expression
+        replaceAmount = false
+        expression = AmountInput.key(base, key)
+        error = ""
+    }
+    fun submit() {
+        val amount = AmountInput.evaluate(expression)
+        if (amount == null || amount <= 0) error = "Введіть суму більше нуля."
+        else if (!validTransfer) error = "Оберіть два різні рахунки для переказу."
+        else if (selectedAccount != null) save(Entry(original?.id ?: 0, kind, amount, account, if (transfer) target else null, if (transfer) null else category, timestamp, note.trim()))
+    }
+    fun pickDate() {
+        DatePickerDialog(context, { _, y, m, d -> setDate(LocalDate.of(y, m + 1, d).atTime(date.toLocalTime())) }, date.year, date.monthValue - 1, date.dayOfMonth).show()
+    }
+    fun pickTime() {
+        TimePickerDialog(context, { _, h, m -> setDate(date.withHour(h).withMinute(m)) }, date.hour, date.minute, true).show()
+    }
+    ModalBottomSheet(
+        onDismissRequest = dismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Panel,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = null
+    ) {
+        Column(Modifier.fillMaxWidth().heightIn(max = (screenHeight * .96).dp).padding(horizontal = 20.dp)) {
+            Box(Modifier.fillMaxWidth().height(8.dp), contentAlignment = Alignment.Center) {
+                Surface(color = Muted.copy(alpha = .4f), shape = RoundedCornerShape(4.dp), modifier = Modifier.width(32.dp).height(3.dp)) {}
+            }
+            Row(Modifier.fillMaxWidth().height(38.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (original == null) "Нова операція" else "Редагувати операцію", fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                IconButton(onClick = dismiss, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Close, "Закрити введення", tint = Muted, modifier = Modifier.size(20.dp)) }
+            }
+            // Only the body scrolls. The labelled save action stays visible on short screens.
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("expense", "income", "transfer").forEach { type ->
+                        val selected = kind == type
+                        Surface(onClick = { kind = type; error = "" }, modifier = Modifier.weight(1f).height(38.dp), shape = RoundedCornerShape(12.dp), color = if (selected) Accent else Bg, contentColor = if (selected) Bg else Muted) {
+                            Box(contentAlignment = Alignment.Center) { Text(kindName(type), fontSize = 13.sp, lineHeight = 18.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) }
+                        }
                     }
                 }
-                IconButton(onClick = dismiss, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Close, "Закрити введення") }
-            }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { setDate(date.minusDays(1)) }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Попередній день") }
-                TextButton(onClick = { DatePickerDialog(context, { _, y, m, d -> setDate(LocalDate.of(y, m + 1, d).atTime(date.toLocalTime())) }, date.year, date.monthValue - 1, date.dayOfMonth).show() }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) {
-                    Icon(Icons.Default.CalendarMonth, null, Modifier.size(20.dp), tint = Muted)
-                    Spacer(Modifier.width(8.dp))
-                    Text((if (date.toLocalDate() == LocalDate.now()) "Сьогодні, " else "") + date.format(DateTimeFormatter.ofPattern(if (date.year == LocalDate.now().year) "d MMMM" else "d MMMM yyyy", uk)), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+                Column(Modifier.fillMaxWidth().padding(vertical = 1.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Сума у гривнях", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+                        Text(expression.ifEmpty { "0" }.replace('.', ','), fontSize = if (expression.length > 14) 24.sp else if (expression.length > 9) 32.sp else 42.sp, lineHeight = if (expression.length > 14) 30.sp else if (expression.length > 9) 38.sp else 50.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 2, modifier = Modifier.weight(1f, fill = false).semantics { contentDescription = "Сума: ${expression.ifEmpty { "0" }} гривень" })
+                        Text("грн", color = Muted, fontSize = 18.sp, modifier = Modifier.padding(start = 8.dp))
+                    }
+                    if (expression.any { it in "+−×÷" }) Text(evaluated?.let { "= ${compactMoney(it)}" } ?: "Завершіть обчислення", fontSize = 12.sp, color = Muted)
                 }
-                IconButton(onClick = { setDate(date.plusDays(1)) }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Наступний день") }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SelectionTile(if (transfer) "З рахунку" else "Рахунок", selectedAccount?.name ?: "Оберіть", if (selectedAccount?.cash == true) Icons.Default.Payments else Icons.Default.CreditCard, Color(0xFF5D93F2), Modifier.weight(1f)) { accountPicker = true }
-                SelectionTile(if (transfer) "На рахунок" else "Категорія", if (transfer) state.accounts.find { it.id == target }?.name ?: "Оберіть" else selectedCategory?.name ?: "Без категорії", if (transfer) Icons.Default.CreditCard else selectedCategory?.let { categoryIcon(it.icon) } ?: Icons.Default.Category, if (transfer) Green else selectedCategory?.let { Color(it.color) } ?: Color(0xFFA577FF), Modifier.weight(1f)) { categoryPicker = true }
-            }
-            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(if (expression.isEmpty()) "0 грн" else expression.replace('.', ',') + " грн", fontSize = if (expression.length > 14) 27.sp else if (expression.length > 9) 34.sp else 44.sp, fontWeight = FontWeight.Normal, textAlign = TextAlign.Center, modifier = Modifier.semantics { contentDescription = "Сума: ${expression.ifEmpty { "0" }} гривень" })
-                if (expression.any { it in "+−×÷" }) Text(AmountInput.evaluate(expression)?.let { "= ${compactMoney(it)}" } ?: "Завершіть обчислення", fontSize = 13.sp, color = Muted)
-                if (error.isNotBlank()) Text(error, fontSize = 12.sp, color = Red, textAlign = TextAlign.Center)
-            }
-            HorizontalDivider(color = Color(0xFF343B45))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { noteDraft = note; notePicker = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.Notes, null, Modifier.size(21.dp), tint = if (note.isBlank()) Muted else Accent)
-                    Text(if (note.isBlank()) "Коментар" else note, Modifier.padding(start = 6.dp), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Muted)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    EntrySelection(if (transfer) "З рахунку" else "Рахунок", selectedAccount?.name ?: "Оберіть", if (selectedAccount?.cash == true) Icons.Default.Payments else Icons.Default.CreditCard, Accent, Modifier.weight(1f)) { accountPicker = true }
+                    EntrySelection(if (transfer) "На рахунок" else "Категорія", if (transfer) state.accounts.find { it.id == target }?.name ?: "Оберіть" else selectedCategory?.name ?: "Без категорії", if (transfer) Icons.Default.SwapHoriz else selectedCategory?.let { categoryIcon(it.icon) } ?: Icons.Default.Category, if (transfer) Accent else selectedCategory?.let { Color(it.color) } ?: Muted, Modifier.weight(1f)) { categoryPicker = true }
                 }
-                TextButton(onClick = { timePicker() }) { Icon(Icons.Default.Schedule, null, Modifier.size(19.dp), tint = Muted); Text(date.format(DateTimeFormatter.ofPattern("HH:mm")), Modifier.padding(start = 5.dp), fontSize = 12.sp, color = Muted) }
-                if (onDelete != null) IconButton(onClick = onDelete) { Icon(Icons.Default.DeleteOutline, "Видалити операцію", tint = Red) }
-            }
-            // Five columns, with one tall save key, keep the primary action within thumb reach.
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Column(Modifier.weight(4f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(listOf("÷", "7", "8", "9"), listOf("×", "4", "5", "6"), listOf("−", "1", "2", "3"), listOf("+", "C", "0", ",")).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { row.forEach { key ->
-                            KeypadKey(key, Modifier.weight(1f).height(keyHeight), description = when (key) { "C" -> "Очистити суму"; "÷" -> "Поділити"; "×" -> "Помножити"; "−" -> "Відняти"; "+" -> "Додати до суми"; "," -> "Десяткова кома"; else -> key }) {
-                                expression = AmountInput.key(expression, key); error = ""
+                Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { details = !details }, contentPadding = PaddingValues(horizontal = 0.dp), modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.CalendarToday, null, Modifier.size(16.dp), tint = Muted)
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (details) "Згорнути деталі" else (if (date.toLocalDate() == LocalDate.now()) "Сьогодні" else date.format(DateTimeFormatter.ofPattern("d MMM", uk))) + if (note.isNotBlank()) " · коментар" else " · деталі", fontSize = 12.sp, color = Muted, maxLines = 1)
+                        Icon(if (details) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, Modifier.size(17.dp), tint = Muted)
+                    }
+                    IconButton(onClick = { calculator = !calculator }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Calculate, if (calculator) "Приховати калькулятор" else "Калькулятор", Modifier.size(20.dp), tint = if (calculator) Accent else Muted) }
+                    TextButton(onClick = { press("C") }, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("Очистити", fontSize = 12.sp, color = Muted) }
+                }
+                if (details) {
+                    Surface(color = Bg, shape = RoundedCornerShape(14.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                TextButton(onClick = { pickDate() }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) { Text(date.format(DateTimeFormatter.ofPattern("dd.MM.yyyy")), color = Accent, fontSize = 13.sp) }
+                                TextButton(onClick = { pickTime() }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) { Icon(Icons.Default.Schedule, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text(date.format(DateTimeFormatter.ofPattern("HH:mm")), fontSize = 13.sp) }
                             }
-                        } }
+                            TextButton(onClick = { noteDraft = note; notePicker = true }, contentPadding = PaddingValues(4.dp), modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.AutoMirrored.Filled.Notes, null, Modifier.size(18.dp), tint = Muted)
+                                Text(note.ifBlank { "Додати коментар" }, modifier = Modifier.weight(1f).padding(start = 8.dp), textAlign = TextAlign.Start, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = if (note.isBlank()) Muted else MaterialTheme.colorScheme.onSurface)
+                            }
+                            if (onDelete != null) TextButton(onClick = onDelete, contentPadding = PaddingValues(4.dp)) { Icon(Icons.Default.DeleteOutline, null, Modifier.size(18.dp), tint = Red); Text("Видалити операцію", Modifier.padding(start = 6.dp), color = Red, fontSize = 12.sp) }
+                        }
                     }
                 }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    KeypadKey("", Modifier.fillMaxWidth().height(keyHeight), Icons.Default.Backspace, "Стерти цифру") { expression = AmountInput.key(expression, "⌫"); error = "" }
-                    KeypadKey("=", Modifier.fillMaxWidth().height(keyHeight), description = "Обчислити") {
-                        val value = AmountInput.evaluate(expression)
-                        if (value == null || value < 0) error = "Перевірте вираз. Сума не може бути від’ємною." else { expression = editableMoney(value); error = "" }
+                if (!validTransfer) Text("Для переказу оберіть два різні рахунки.", color = Muted, fontSize = 12.sp)
+                if (error.isNotBlank()) Text(error, fontSize = 12.sp, color = Red)
+                if (calculator) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("+", "−", "×", "÷", "=").forEach { key ->
+                        EntryKey(key, Modifier.weight(1f).height(44.dp), description = when (key) { "+" -> "Додати до суми"; "−" -> "Відняти"; "×" -> "Помножити"; "÷" -> "Поділити"; else -> "Обчислити" }, toned = true) {
+                            if (key != "=") press(key) else {
+                                val amount = AmountInput.evaluate(expression)
+                                if (amount == null || amount < 0) error = "Перевірте обчислення." else { expression = editableMoney(amount); replaceAmount = false; error = "" }
+                            }
+                        }
                     }
-                    KeypadKey("", Modifier.fillMaxWidth().height(keyHeight * 2 + 8.dp), Icons.Default.Check, "Зберегти операцію", primary = true) { submit() }
+                }
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf(",", "0", "⌫")).forEach { row ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            row.forEach { key -> EntryKey(if (key == "⌫") "" else key, Modifier.weight(1f).height(keyHeight), icon = if (key == "⌫") Icons.AutoMirrored.Filled.Backspace else null, description = when (key) { "⌫" -> "Стерти цифру"; "," -> "Десяткова кома"; else -> key }) { press(key) } }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+            }
+            Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp)) {
+                Button(onClick = { submit() }, enabled = canSave, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Bg)) {
+                    Icon(if (original == null) Icons.Default.Add else Icons.Default.Check, null, Modifier.size(19.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(saveLabel, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
     }
-    if (accountPicker) AccountPicker(state.accounts, "Оберіть рахунок", { accountPicker = false }) {
+    if (accountPicker) EntryAccountPicker(state, state.accounts, "Оберіть рахунок", account, { accountPicker = false }) {
         account = it.id
         if (target == account) target = state.accounts.firstOrNull { a -> a.id != account }?.id
         accountPicker = false
     }
     if (categoryPicker) {
-        if (transfer) AccountPicker(state.accounts.filter { it.id != account }, "Куди переказати", { categoryPicker = false }) { target = it.id; categoryPicker = false }
-        else AlertDialog(onDismissRequest = { categoryPicker = false }, title = { Text("Оберіть категорію") }, text = {
-            LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (transfer) EntryAccountPicker(state, state.accounts.filter { it.id != account }, "Куди переказати", target, { categoryPicker = false }) { target = it.id; categoryPicker = false }
+        else AlertDialog(onDismissRequest = { categoryPicker = false }, title = { Text("Категорія") }, text = {
+            LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.heightIn(max = 340.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(state.categories, key = { it.id }) { c ->
-                    Surface(onClick = { category = c.id; categoryPicker = false }, color = if (category == c.id) Color(c.color).copy(alpha = .15f) else Color.Transparent, shape = RoundedCornerShape(12.dp)) {
-                        Column(Modifier.padding(vertical = 10.dp, horizontal = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) { CategoryBadge(c, Modifier.size(42.dp)); Text(c.name, fontSize = 11.sp, maxLines = 2, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 5.dp)) }
+                    Surface(onClick = { category = c.id; categoryPicker = false }, color = if (category == c.id) Color(c.color).copy(alpha = .16f) else Color.Transparent, shape = RoundedCornerShape(14.dp)) {
+                        Column(Modifier.padding(vertical = 10.dp, horizontal = 3.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            CategoryBadge(c, Modifier.size(40.dp))
+                            Text(c.name, fontSize = 11.sp, lineHeight = 14.sp, maxLines = 2, minLines = 2, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 5.dp))
+                        }
                     }
                 }
             }
         }, confirmButton = { TextButton(onClick = { category = null; categoryPicker = false }) { Text("Без категорії") } }, dismissButton = { TextButton(onClick = { categoryPicker = false }) { Text("Закрити") } })
     }
-    if (notePicker) AlertDialog(onDismissRequest = { notePicker = false }, title = { Text("Коментар") }, text = { OutlinedTextField(value = noteDraft, onValueChange = { noteDraft = it.take(500) }, placeholder = { Text("Наприклад, продукти на вечерю") }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 4) }, confirmButton = { TextButton(onClick = { note = noteDraft; notePicker = false }) { Text("Готово") } }, dismissButton = { TextButton(onClick = { notePicker = false }) { Text("Скасувати") } })
+    if (notePicker) AlertDialog(onDismissRequest = { notePicker = false }, title = { Text("Коментар") }, text = {
+        OutlinedTextField(value = noteDraft, onValueChange = { noteDraft = it.take(500) }, placeholder = { Text("Наприклад, продукти на вечерю") }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 4, shape = RoundedCornerShape(14.dp))
+    }, confirmButton = { TextButton(onClick = { note = noteDraft; notePicker = false }) { Text("Готово") } }, dismissButton = { TextButton(onClick = { notePicker = false }) { Text("Скасувати") } })
 }
 
-@Composable private fun SelectionTile(title: String, name: String, icon: ImageVector, color: Color, modifier: Modifier, click: () -> Unit) {
-    Surface(onClick = click, modifier = modifier, color = color.copy(alpha = .08f), border = BorderStroke(1.dp, color.copy(alpha = .8f)), shape = RoundedCornerShape(18.dp)) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Muted)
-            Row(verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = color, modifier = Modifier.size(25.dp)); Text(name, modifier = Modifier.padding(start = 8.dp).weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 19.sp) }
+@Composable private fun EntrySelection(label: String, value: String, icon: ImageVector, color: Color, modifier: Modifier, click: () -> Unit) {
+    Surface(onClick = click, modifier = modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(14.dp), color = Bg, border = BorderStroke(1.dp, Muted.copy(alpha = .12f))) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = color, modifier = Modifier.size(20.dp))
+            Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                Text(label, fontSize = 10.sp, lineHeight = 14.sp, color = Muted)
+                Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+            }
+            Icon(Icons.Default.ExpandMore, null, tint = Muted, modifier = Modifier.size(15.dp))
         }
     }
 }
-@Composable private fun KeypadKey(label: String, modifier: Modifier, icon: ImageVector? = null, description: String, primary: Boolean = false, click: () -> Unit) {
-    Surface(onClick = click, modifier = modifier.semantics { contentDescription = description }, shape = RoundedCornerShape(18.dp), color = if (primary) Color(0xFF12577F) else Bg, contentColor = if (primary) Color(0xFFCEE9FF) else MaterialTheme.colorScheme.onSurface) {
-        Box(contentAlignment = Alignment.Center) { if (icon == null) Text(label, fontSize = 29.sp) else Icon(icon, null, Modifier.size(28.dp)) }
+@Composable private fun EntryKey(label: String, modifier: Modifier, description: String, icon: ImageVector? = null, toned: Boolean = false, click: () -> Unit) {
+    Surface(onClick = click, modifier = modifier.semantics { contentDescription = description }, shape = RoundedCornerShape(14.dp), color = if (toned) Accent.copy(alpha = .12f) else Bg, contentColor = if (toned) Accent else MaterialTheme.colorScheme.onSurface) {
+        Box(contentAlignment = Alignment.Center) { if (icon == null) Text(label, fontSize = if (toned) 24.sp else 27.sp, lineHeight = 32.sp) else Icon(icon, null, Modifier.size(23.dp)) }
     }
 }
-@Composable private fun AccountPicker(accounts: List<Account>, title: String, dismiss: () -> Unit, select: (Account) -> Unit) {
+@Composable private fun EntryAccountPicker(state: FinanceState, accounts: List<Account>, title: String, selected: Long?, dismiss: () -> Unit, select: (Account) -> Unit) {
     AlertDialog(onDismissRequest = dismiss, title = { Text(title) }, text = {
-        LazyColumn(Modifier.heightIn(max = 340.dp)) {
-            if (accounts.isEmpty()) item { Text("Додайте ще один рахунок у вкладці «Рахунки», щоб переказувати між ними.", color = Muted) }
+        LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (accounts.isEmpty()) item { Text("Для переказу потрібні щонайменше два рахунки.", color = Muted) }
             items(accounts, key = { it.id }) { account ->
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { select(account) }.padding(vertical = 16.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(if (account.cash) Icons.Default.Payments else Icons.Default.CreditCard, null, tint = Color(account.color))
-                    Text(account.name, Modifier.padding(start = 12.dp), fontSize = 17.sp)
+                Surface(onClick = { select(account) }, color = if (account.id == selected) Accent.copy(alpha = .1f) else Color.Transparent, shape = RoundedCornerShape(14.dp)) {
+                    Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (account.cash) Icons.Default.Payments else Icons.Default.CreditCard, null, tint = Color(account.color))
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                            Text(account.name, fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium)
+                            Text(compactMoney(balance(account, state.entries)), color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
+                        }
+                        if (account.id == selected) Icon(Icons.Default.Check, null, tint = Accent, modifier = Modifier.size(19.dp))
+                    }
                 }
             }
         }
