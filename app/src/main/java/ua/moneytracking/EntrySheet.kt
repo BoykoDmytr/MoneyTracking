@@ -78,11 +78,16 @@ internal fun EntrySheet(
     var categoryPicker by remember { mutableStateOf(false) }
     var incomeSourcePicker by remember { mutableStateOf(false) }
     var notePicker by remember { mutableStateOf(false) }
+    var ratePicker by remember { mutableStateOf(false) }
     var noteDraft by rememberSaveable { mutableStateOf(note) }
     val date = Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDateTime()
     val selectedAccount = state.accounts.find { it.id == account }
+    val selectedTarget = state.accounts.find { it.id == target }
+    val currency = selectedAccount?.currency ?: "UAH"
     val selectedCategory = state.categories.find { it.id == category }
     val transfer = kind == "transfer"
+    val crossCurrency = transfer && selectedTarget != null && selectedAccount != null && currency != selectedTarget.currency
+    var rate by rememberSaveable(account, target) { mutableStateOf(if (original?.accountId == account && original.targetId == target) exchangeRate(original) else "") }
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val screenHeight = LocalConfiguration.current.screenHeightDp
@@ -90,9 +95,10 @@ internal fun EntrySheet(
     val detailRotation by animateFloatAsState(if (details) 180f else 0f, tween(160), label = "Entry detail chevron")
     val calculatorTint by animateColorAsState(if (calculator) Accent else Muted, tween(150), label = "Calculator selection")
     val evaluated = AmountInput.evaluate(expression)
-    val validTransfer = !transfer || (target != null && target != account)
+    val credited = if (crossCurrency) exchangeAmount(evaluated, rate) else evaluated
+    val validTransfer = !transfer || (selectedTarget != null && target != account)
     val validIncomeSource = kind != "income" || (sender.trim().length <= 120 && (incomeSource != "person" || sender.isNotBlank()))
-    val canSave = evaluated != null && evaluated > 0 && validTransfer && validIncomeSource && selectedAccount != null
+    val canSave = evaluated != null && evaluated > 0 && validTransfer && (!crossCurrency || credited != null) && validIncomeSource && selectedAccount != null
     val saveLabel = if (original != null) "Зберегти зміни" else when (kind) {
         "income" -> "Додати дохід"
         "transfer" -> "Переказати"
@@ -112,6 +118,7 @@ internal fun EntrySheet(
         val amount = AmountInput.evaluate(expression)
         if (amount == null || amount <= 0) error = "Введіть суму більше нуля."
         else if (!validTransfer) error = "Оберіть два різні рахунки для переказу."
+        else if (crossCurrency && credited == null) error = "Вкажіть курс і перевірте суму зарахування."
         else if (!validIncomeSource) error = "Вкажіть, від кого надійшли кошти (до 120 символів)."
         else if (selectedAccount != null) save(Entry(
             id = original?.id ?: 0,
@@ -127,7 +134,8 @@ internal fun EntrySheet(
             time = timestamp,
             note = note.trim(),
             incomeSource = if (kind == "income") incomeSource else "other",
-            sender = if (kind == "income") sender.trim() else ""
+            sender = if (kind == "income") sender.trim() else "",
+            targetAmount = if (crossCurrency) credited else null
         ))
     }
     fun pickDate() {
@@ -165,15 +173,15 @@ internal fun EntrySheet(
                     }
                 }
                 Column(Modifier.fillMaxWidth().padding(vertical = 1.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Сума у гривнях", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                    Text(if (transfer) "Сума списання · $currency" else "Сума · $currency", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
-                        Text(expression.ifEmpty { "0" }.replace('.', ','), fontSize = if (expression.length > 14) 24.sp else if (expression.length > 9) 32.sp else 42.sp, lineHeight = if (expression.length > 14) 30.sp else if (expression.length > 9) 38.sp else 50.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 2, modifier = Modifier.weight(1f, fill = false).semantics { contentDescription = "Сума: ${expression.ifEmpty { "0" }} гривень" })
-                        Text("грн", color = Muted, fontSize = 18.sp, modifier = Modifier.padding(start = 8.dp))
+                        Text(expression.ifEmpty { "0" }.replace('.', ','), fontSize = if (expression.length > 14) 24.sp else if (expression.length > 9) 32.sp else 42.sp, lineHeight = if (expression.length > 14) 30.sp else if (expression.length > 9) 38.sp else 50.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 2, modifier = Modifier.weight(1f, fill = false).semantics { contentDescription = "Сума: ${expression.ifEmpty { "0" }} $currency" })
+                        Text(currencyUnit(currency), color = Muted, fontSize = 18.sp, modifier = Modifier.padding(start = 8.dp))
                     }
-                    if (expression.any { it in "+−×÷" }) Text(evaluated?.let { "= ${compactMoney(it)}" } ?: "Завершіть обчислення", fontSize = 12.sp, color = Muted)
+                    if (expression.any { it in "+−×÷" }) Text(evaluated?.let { "= ${compactMoney(it, currency)}" } ?: "Завершіть обчислення", fontSize = 12.sp, color = Muted)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    EntrySelection(if (transfer) "З рахунку" else "Рахунок", selectedAccount?.name ?: "Оберіть", if (selectedAccount?.cash == true) Icons.Default.Payments else Icons.Default.CreditCard, Accent, Modifier.weight(1f)) { accountPicker = true }
+                    EntrySelection(if (transfer) "З рахунку" else "Рахунок", selectedAccount?.let { "${it.name} · ${it.currency}" } ?: "Оберіть", if (selectedAccount?.cash == true) Icons.Default.Payments else Icons.Default.CreditCard, Accent, Modifier.weight(1f)) { accountPicker = true }
                     when (kind) {
                         "income" -> EntrySelection(
                             "Джерело",
@@ -183,8 +191,15 @@ internal fun EntrySheet(
                             Modifier.weight(1f),
                             valueLines = 2
                         ) { incomeSourcePicker = true }
-                        else -> EntrySelection(if (transfer) "На рахунок" else "Категорія", if (transfer) state.accounts.find { it.id == target }?.name ?: "Оберіть" else selectedCategory?.name ?: "Без категорії", if (transfer) Icons.Default.SwapHoriz else selectedCategory?.let { categoryIcon(it.icon) } ?: Icons.Default.Category, if (transfer) Accent else selectedCategory?.let { Color(it.color) } ?: Muted, Modifier.weight(1f)) { categoryPicker = true }
+                        else -> EntrySelection(if (transfer) "На рахунок" else "Категорія", if (transfer) selectedTarget?.let { "${it.name} · ${it.currency}" } ?: "Оберіть" else selectedCategory?.name ?: "Без категорії", if (transfer) Icons.Default.SwapHoriz else selectedCategory?.let { categoryIcon(it.icon) } ?: Icons.Default.Category, if (transfer) Accent else selectedCategory?.let { Color(it.color) } ?: Muted, Modifier.weight(1f)) { categoryPicker = true }
                     }
+                }
+                if (crossCurrency) OutlinedButton(onClick = { ratePicker = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
+                        Text(if (rate.isBlank()) "Вказати курс обміну" else "1 $currency = ${rate.replace('.', ',')} ${selectedTarget?.currency}", fontSize = 12.sp)
+                        Text(credited?.let { "Зарахується: ${money(it, selectedTarget!!.currency)}" } ?: "Введіть суму та курс", fontSize = 13.sp, color = Muted)
+                    }
+                    Icon(Icons.Default.Edit, null, Modifier.size(18.dp))
                 }
                 Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { details = !details }, contentPadding = PaddingValues(horizontal = 0.dp), modifier = Modifier.weight(1f)) {
@@ -282,6 +297,10 @@ internal fun EntrySheet(
     if (notePicker) FormDialog("Коментар", { notePicker = false }, { note = noteDraft; notePicker = false }, saveLabel = "Готово", maxPanelHeight = 360.dp) {
         OutlinedTextField(value = noteDraft, onValueChange = { noteDraft = it.take(500) }, placeholder = { Text("Наприклад, продукти на вечерю") }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 4, shape = RoundedCornerShape(14.dp))
     }
+    if (ratePicker && crossCurrency) ExchangeRateDialog(currency, selectedTarget!!.currency, evaluated, rate, { ratePicker = false }) {
+        rate = it
+        ratePicker = false
+    }
 }
 
 @Composable private fun EntrySelection(label: String, value: String, icon: ImageVector, color: Color, modifier: Modifier, valueLines: Int = 1, click: () -> Unit) {
@@ -313,7 +332,7 @@ internal fun EntrySheet(
                         Icon(if (account.cash) Icons.Default.Payments else Icons.Default.CreditCard, null, tint = Color(account.color))
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
                             Text(account.name, fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium)
-                            Text(compactMoney(balance(account, state.entries)), color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
+                            Text("${account.currency} · ${compactMoney(balance(account, state.entries), account.currency)}", color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
                         }
                         if (account.id == selected) Icon(Icons.Default.Check, null, tint = Accent, modifier = Modifier.size(19.dp))
                     }

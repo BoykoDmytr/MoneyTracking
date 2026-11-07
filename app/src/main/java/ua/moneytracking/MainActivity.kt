@@ -12,6 +12,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -36,6 +38,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import java.time.*
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 internal val Bg = Color(0xFF0C1215)
 internal val Panel = Color(0xFF162025)
@@ -100,6 +103,8 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
     val context = LocalContext.current
     val state by model.state.collectAsState()
     val error by model.error.collectAsState()
+    val backupBusy by model.backupBusy.collectAsState()
+    val importPreview by model.importPreview.collectAsState()
     var writePending by remember { mutableStateOf(false) }
     var preferences by remember { mutableStateOf(loadPreferences(context)) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -118,7 +123,14 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
     val titles = listOf("Огляд", "Історія", "Аналітика", "Налаштування")
     val icons = listOf(Icons.Default.SpaceDashboard, Icons.AutoMirrored.Filled.ReceiptLong, Icons.Default.BarChart, Icons.Default.Settings)
     val snack = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     val screenStates = rememberSaveableStateHolder()
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) model.exportTo(uri, preferences) { scope.launch { snack.showSnackbar("Резервну копію збережено") } }
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) model.prepareImport(uri)
+    }
 
     fun startAccount() {
         returnToOverviewAfterAccount = true
@@ -238,7 +250,10 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
                             onDeleteAccount = ::deleteAccount,
                             onAddCategory = { categoryForm = null; categoryOpen = true },
                             onEditCategory = { categoryForm = it; categoryOpen = true },
-                            onDeleteCategory = ::deleteCategory
+                            onDeleteCategory = ::deleteCategory,
+                            backupBusy = backupBusy,
+                            onExport = { exportLauncher.launch("Moi-Finansy-${LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss"))}.json") },
+                            onImport = { importLauncher.launch(arrayOf("*/*")) }
                         )
                     }
                 }
@@ -279,6 +294,17 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
             confirmButton = { TextButton(onClick = { action(); confirm = null }) { Text("Видалити", color = Red) } },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Скасувати") } }
         )
+    }
+    importPreview?.let { backup ->
+        ImportPreviewDialog(backup, backupBusy, model::dismissImport) {
+            model.confirmImport { restored ->
+                preferences = restored
+                accountOpen = false; categoryOpen = false; entryOpen = false
+                returnToOverviewAfterAccount = false
+                monthText = YearMonth.now().toString()
+                scope.launch { snack.showSnackbar("Дані відновлено з копії") }
+            }
+        }
     }
     if (error != null) AlertDialog(
         onDismissRequest = { model.error.value = null },

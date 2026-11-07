@@ -95,23 +95,27 @@ import androidx.compose.ui.window.DialogProperties
     var amount by remember { mutableStateOf(if (original == null) "0" else editableMoney(initialBalance)) }
     var color by remember { mutableLongStateOf(original?.color ?: palette[0]) }
     var cash by remember { mutableStateOf(original?.cash ?: false) }
+    var currency by remember { mutableStateOf(original?.currency ?: "UAH") }
     var digits by remember { mutableStateOf(original?.lastFour.orEmpty()) }
     var error by remember { mutableStateOf("") }
     FormDialog(if (original == null) "Новий рахунок" else "Редагувати рахунок", dismiss, {
         val value = parseMoney(amount)
         if (name.isBlank() || value == null || (!cash && digits.isNotBlank() && !Regex("\\d{4}").matches(digits))) error = "Вкажіть назву, коректну суму та рівно 4 цифри картки (або залиште поле порожнім)."
         else save(
-            Account(original?.id ?: 0, name.trim(), original?.opening ?: value, color, cash, if (cash) "" else digits),
+            Account(original?.id ?: 0, name.trim(), original?.opening ?: value, color, cash, if (cash) "" else digits, currency),
             if (original != null && value != initialBalance) value else null
         )
     }) {
         Field("Назва рахунку", name) { name = it.take(60) }
         Choice("Тип", cash, listOf(false to "Банківська картка", true to "Готівка")) { cash = it }
+        if (original == null) Choice("Валюта", currency, supportedCurrencies.map { it to currencyName(it) }) { currency = it }
+        else Text("${currencyName(currency)} · Для іншої валюти створіть новий рахунок.", color = Muted, fontSize = 12.sp)
+        val balanceLabel = (if (original == null) "Початковий баланс, " else "Баланс зараз, ") + currencyUnit(currency)
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(if (original == null) "Початковий баланс, грн" else "Баланс зараз, грн", color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
+            Text(balanceLabel, color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
             OutlinedTextField(
                 value = amount, onValueChange = { amount = it },
-                modifier = Modifier.fillMaxWidth().semantics { contentDescription = if (original == null) "Початковий баланс, грн" else "Баланс зараз, грн" }, singleLine = true, shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = balanceLabel }, singleLine = true, shape = RoundedCornerShape(12.dp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 trailingIcon = {
                     TextButton(onClick = {
@@ -168,7 +172,7 @@ import androidx.compose.ui.window.DialogProperties
         Text(state.accounts.find { it.id == original.accountId }?.name ?: "Рахунок", fontWeight = FontWeight.SemiBold)
         Text("Корекція змінює залишок на рахунку, але не входить у доходи чи витрати.", color = Muted, fontSize = 13.sp)
         Choice("Напрям", increase, listOf(true to "Збільшити баланс", false to "Зменшити баланс")) { increase = it }
-        Field("Сума корекції, грн", amount, true) { amount = it }
+        Field("Сума корекції, ${currencyUnit(state.accounts.find { it.id == original.accountId }?.currency ?: "UAH")}", amount, true) { amount = it }
         OutlinedButton(onClick = { DatePickerDialog(context, { _, y, m, d -> updateDate(LocalDate.of(y, m + 1, d).atTime(date.toLocalTime())) }, date.year, date.monthValue - 1, date.dayOfMonth).show() }, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.CalendarMonth, null); Spacer(Modifier.width(8.dp)); Text(date.format(DateTimeFormatter.ofPattern("dd.MM.yyyy")))
         }

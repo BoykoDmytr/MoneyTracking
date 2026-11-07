@@ -59,13 +59,16 @@ internal fun OverviewScreen(
     onHistory: () -> Unit,
     onStart: () -> Unit
 ) {
+    var reportCurrency by rememberSaveable { mutableStateOf(state.currencies().first()) }
+    val currency = reportCurrency.takeIf { it in state.currencies() } ?: state.currencies().first()
     val monthEntries = state.entries.filter { it.inMonth(month) }
-    val totals = monthlyTotals(state.entries, month)
+    val currencyEntries = state.entriesInCurrency(currency)
+    val totals = monthlyTotals(currencyEntries, month)
     val spending = totals.expense
     val income = totals.income
     val recent = monthEntries.sortedWith(compareByDescending<Entry> { it.time }.thenByDescending { it.id }).take(3)
     val categoryTotals = state.categories.associate { c ->
-        c.id to monthEntries.filter { it.kind == "expense" && it.categoryId == c.id }.sumOf { it.amount }
+        c.id to currencyEntries.filter { it.inMonth(month) && it.kind == "expense" && it.categoryId == c.id }.sumOf { it.amount }
     }
     val quickCategories = state.categories.sortedByDescending { categoryTotals[it.id] ?: 0L }
     LazyColumn(
@@ -105,7 +108,7 @@ internal fun OverviewScreen(
                 }
             }
         }
-        item { DailyBalanceHero(state, preferences, month, spending, income) }
+        item { DailyBalanceHero(state, preferences, month, spending, income, currency) { reportCurrency = it } }
         if (state.accounts.isNotEmpty()) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -116,9 +119,9 @@ internal fun OverviewScreen(
                                 Column(Modifier.widthIn(min = 160.dp, max = 240.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(if (account.cash) Icons.Default.Payments else Icons.Default.CreditCard, null, tint = Color(account.color), modifier = Modifier.size(20.dp))
-                                        Text(account.name, Modifier.padding(start = 8.dp), color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("${account.name} · ${account.currency}", Modifier.padding(start = 8.dp), color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
-                                    Text(if (preferences.hideBalance) "•••• грн" else compactMoney(balance(account, state.entries)), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                                    Text(if (preferences.hideBalance) "•••• ${currencyUnit(account.currency)}" else compactMoney(balance(account, state.entries), account.currency), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                                     if (!account.cash && account.lastFour.isNotBlank()) Text("•••• ${account.lastFour}", color = Muted, fontSize = 11.sp)
                                 }
                             }
@@ -135,7 +138,7 @@ internal fun OverviewScreen(
                                 Column(Modifier.width(108.dp).padding(horizontal = 10.dp, vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(9.dp)) {
                                     CategoryBadge(category, Modifier.size(40.dp))
                                     Text(category.name, fontSize = 12.sp, textAlign = TextAlign.Center, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Text(compactMoney(categoryTotals[category.id] ?: 0L), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Muted, textAlign = TextAlign.Center)
+                                    Text(compactMoney(categoryTotals[category.id] ?: 0L, currency), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Muted, textAlign = TextAlign.Center)
                                 }
                             }
                         }
@@ -159,7 +162,7 @@ internal fun OverviewScreen(
 }
 
 @Composable
-private fun DailyBalanceHero(state: FinanceState, preferences: UserPreferences, month: YearMonth, spending: Long, income: Long) {
+private fun DailyBalanceHero(state: FinanceState, preferences: UserPreferences, month: YearMonth, spending: Long, income: Long, currency: String, changeCurrency: (String) -> Unit) {
     Surface(shape = RoundedCornerShape(28.dp), color = Color.Transparent) {
         Column(
             Modifier.fillMaxWidth()
@@ -171,20 +174,23 @@ private fun DailyBalanceHero(state: FinanceState, preferences: UserPreferences, 
                 Icon(Icons.Default.AccountBalanceWallet, null, tint = Accent, modifier = Modifier.size(20.dp))
                 Text("Усього на рахунках", Modifier.weight(1f).padding(start = 9.dp), color = Color(0xFFC2DCD0), fontSize = 14.sp)
                 Surface(color = Accent.copy(alpha = .12f), shape = CircleShape) {
-                    Text("UAH", Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = Accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Text(state.currencies().joinToString(" · "), Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = Accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
-            val total = state.accounts.sumOf { balance(it, state.entries) }
-            Text(
-                if (preferences.hideBalance) "•••• грн" else compactMoney(total),
-                color = Color(0xFFF1FFF6), fontWeight = FontWeight.SemiBold,
-                fontSize = if (compactMoney(total).length > 18) 27.sp else 36.sp,
-                lineHeight = if (compactMoney(total).length > 18) 35.sp else 44.sp
-            )
+            state.currencies().forEach { code ->
+                val total = state.accounts.filter { it.currency == code }.sumOf { balance(it, state.entries) }
+                Text(
+                    if (preferences.hideBalance) "•••• ${currencyUnit(code)}" else compactMoney(total, code),
+                    color = Color(0xFFF1FFF6), fontWeight = FontWeight.SemiBold,
+                    fontSize = if (compactMoney(total, code).length > 18 || state.currencies().size > 1) 27.sp else 36.sp,
+                    lineHeight = 40.sp
+                )
+            }
             Text("Поточний баланс усіх рахунків", fontSize = 11.sp, lineHeight = 16.sp, color = Color(0xFFC2DCD0))
             HorizontalDivider(color = Accent.copy(alpha = .15f))
             Text(month.format(DateTimeFormatter.ofPattern("LLLL yyyy", uk)).replaceFirstChar { it.titlecase(uk) }, color = Color(0xFFC2DCD0), fontSize = 12.sp, lineHeight = 17.sp)
-            DailyMetricPair("Витрачено за місяць", spending, Red, "Отримано за місяць", income, Green, "overview-monthly-expense", "overview-monthly-income")
+            if (state.currencies().size > 1) DailySelect("Валюта звіту", currency, state.currencies().map { it to currencyName(it) }, change = changeCurrency)
+            DailyMetricPair("Витрачено за місяць", spending, Red, "Отримано за місяць", income, Green, "overview-monthly-expense", "overview-monthly-income", currency)
             Text("Власні перекази та корекції не входять у доходи й витрати.", fontSize = 10.sp, lineHeight = 15.sp, color = Color(0xFFADC9BB))
         }
     }
@@ -211,19 +217,18 @@ internal fun TransactionsScreen(
             (activeAccount == null || e.accountId == activeAccount || e.targetId == activeAccount) &&
             (kind == "all" || e.kind == kind) &&
             (activeCategory == null || e.categoryId == activeCategory) &&
-            (search.isBlank() || listOf(e.note, accountNames[e.accountId].orEmpty(), accountNames[e.targetId].orEmpty(), categoryNames[e.categoryId].orEmpty(), compactMoney(e.amount), kindName(e.kind), if (e.kind == "income") incomeSourceLabel(e.incomeSource) else "", if (e.kind == "income") e.sender else "").any { it.contains(search.trim(), ignoreCase = true) })
+            (search.isBlank() || listOf(e.note, accountNames[e.accountId].orEmpty(), accountNames[e.targetId].orEmpty(), categoryNames[e.categoryId].orEmpty(), compactMoney(e.amount, state.accounts.find { it.id == e.accountId }?.currency ?: "UAH"), e.targetAmount?.let { compactMoney(it, state.accounts.find { a -> a.id == e.targetId }?.currency ?: "UAH") }.orEmpty(), kindName(e.kind), if (e.kind == "income") incomeSourceLabel(e.incomeSource) else "", if (e.kind == "income") e.sender else "").any { it.contains(search.trim(), ignoreCase = true) })
     }.sortedWith(compareByDescending<Entry> { it.time }.thenByDescending { it.id })
     val monthStart = month.atDay(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
     val monthEnd = month.plusMonths(1).atDay(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
     val accounts = state.accounts.filter { activeAccount == null || it.id == activeAccount }
-    val opening = accounts.sumOf { balance(it, state.entries.filter { e -> e.time < monthStart }) }
-    val closing = accounts.sumOf { balance(it, state.entries.filter { e -> e.time < monthEnd }) }
+    val accountGroups = accounts.groupBy { it.currency }
     val hasFilters = activeAccount != null || activeCategory != null || kind != "all" || search.isNotBlank()
     LazyColumn(verticalArrangement = Arrangement.spacedBy(15.dp), contentPadding = PaddingValues(bottom = 28.dp)) {
         item(key = "history-filters") {
             Column {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    DailySelect("Рахунок", activeAccount, listOf(null to "Усі рахунки") + state.accounts.map { it.id to it.name }, Modifier.weight(1f)) { accountId = it }
+                    DailySelect("Рахунок", activeAccount, listOf(null to "Усі рахунки") + state.accounts.map { it.id to "${it.name} · ${it.currency}" }, Modifier.weight(1f)) { accountId = it }
                     Surface(onClick = { expandedFilters = !expandedFilters }, color = if (hasFilters || expandedFilters) Accent.copy(alpha = .12f) else Panel, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, if (hasFilters || expandedFilters) Accent.copy(alpha = .3f) else DailyBorder)) {
                         Row(Modifier.heightIn(min = 52.dp).padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Tune, "Фільтри історії", Modifier.size(20.dp), tint = if (hasFilters) Accent else Muted)
@@ -251,7 +256,12 @@ internal fun TransactionsScreen(
         }
         item {
             DailySurface {
-                DailyMetricPair("На початок місяця", opening, MaterialTheme.colorScheme.onSurface, "На кінець місяця", closing, Accent)
+                accountGroups.forEach { (code, group) ->
+                    if (accountGroups.size > 1) Text(code, color = Muted, fontSize = 12.sp)
+                    val opening = group.sumOf { balance(it, state.entries.filter { e -> e.time < monthStart }) }
+                    val closing = group.sumOf { balance(it, state.entries.filter { e -> e.time < monthEnd }) }
+                    DailyMetricPair("На початок місяця", opening, MaterialTheme.colorScheme.onSurface, "На кінець місяця", closing, Accent, currency = code)
+                }
                 if (hasFilters && (activeCategory != null || kind != "all" || search.isNotBlank())) Text("Залишки показано за всіма операціями вибраних рахунків.", fontSize = 11.sp, lineHeight = 16.sp, color = Muted)
             }
         }
@@ -260,16 +270,18 @@ internal fun TransactionsScreen(
         }
         entries.groupBy { it.date().toLocalDate() }.forEach { (date, dayEntries) ->
             item(key = "day-$date") {
-                val net = dayEntries.sumOf { entry ->
-                    if (activeAccount != null) delta(entry, activeAccount)
-                    else when (entry.kind) { "expense" -> -entry.amount; "income", "correction" -> entry.amount; else -> 0L }
-                }
+                val dayTotals = accountGroups.filterValues { group -> group.any { a -> dayEntries.any { it.accountId == a.id || it.targetId == a.id } } }
+                    .mapValues { (_, group) -> group.sumOf { a -> dayEntries.sumOf { delta(it, a.id) } } }
                 Row(Modifier.animateItem(fadeInSpec = tween(160), placementSpec = tween(180), fadeOutSpec = tween(100)).fillMaxWidth().padding(top = 8.dp, bottom = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column {
                         Text(date.format(DateTimeFormatter.ofPattern("d MMMM", uk)), fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                         Text(date.format(DateTimeFormatter.ofPattern("EEEE", uk)), fontSize = 12.sp, color = Muted)
                     }
-                    Text((if (net > 0) "+" else "") + compactMoney(net), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (net > 0) Green else if (net < 0) Red else Muted)
+                    Column(horizontalAlignment = Alignment.End) {
+                        dayTotals.forEach { (code, net) ->
+                            Text((if (net > 0) "+" else "") + compactMoney(net, code), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (net > 0) Green else if (net < 0) Red else Muted)
+                        }
+                    }
                 }
             }
             items(dayEntries, key = { it.id }) { entry ->
@@ -285,9 +297,13 @@ internal fun TransactionsScreen(
 internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
     var accountId by rememberSaveable { mutableStateOf<Long?>(null) }
     val activeAccount = accountId?.takeIf { id -> state.accounts.any { it.id == id } }
-    val scoped = state.entries.filter { activeAccount == null || it.accountId == activeAccount || it.targetId == activeAccount }
+    var reportCurrency by rememberSaveable { mutableStateOf(state.currencies().first()) }
+    val currency = state.accounts.find { it.id == activeAccount }?.currency
+        ?: reportCurrency.takeIf { it in state.currencies() } ?: state.currencies().first()
+    val currencyEntries = state.entriesInCurrency(currency)
+    val scoped = currencyEntries.filter { activeAccount == null || it.accountId == activeAccount }
     val selected = scoped.filter { it.inMonth(month) }
-    val totals = monthlyTotals(state.entries, month, accountId = activeAccount)
+    val totals = monthlyTotals(currencyEntries, month, accountId = activeAccount)
     val spending = totals.expense
     val income = totals.income
     val difference = income - spending
@@ -302,13 +318,18 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
         chartReveal.animateTo(1f, animationSpec = tween(240))
     }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(22.dp), contentPadding = PaddingValues(bottom = 28.dp)) {
-        item { DailySelect("Рахунок", activeAccount, listOf(null to "Усі рахунки") + state.accounts.map { it.id to it.name }) { accountId = it } }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                DailySelect("Рахунок", activeAccount, listOf(null to "Усі рахунки") + state.accounts.map { it.id to "${it.name} · ${it.currency}" }) { accountId = it }
+                if (activeAccount == null && state.currencies().size > 1) DailySelect("Валюта звіту", currency, state.currencies().map { it to currencyName(it) }) { reportCurrency = it }
+            }
+        }
         item {
             DailySurface {
                 Text("Результат місяця", color = Muted, fontSize = 14.sp)
-                Text((if (difference > 0) "+" else "") + compactMoney(difference), fontSize = 30.sp, fontWeight = FontWeight.SemiBold, color = if (difference < 0) Red else Green)
+                Text((if (difference > 0) "+" else "") + compactMoney(difference, currency), fontSize = 30.sp, fontWeight = FontWeight.SemiBold, color = if (difference < 0) Red else Green)
                 HorizontalDivider(color = DailyBorder)
-                DailyMetricPair("Доходи", income, Green, "Витрати", spending, Red, "insights-monthly-income", "insights-monthly-expense")
+                DailyMetricPair("Доходи", income, Green, "Витрати", spending, Red, "insights-monthly-income", "insights-monthly-expense", currency)
                 Text("Власні перекази та корекції балансу не враховуються.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
             }
         }
@@ -329,7 +350,7 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
                             }
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("Усього витрат", color = Muted, fontSize = 11.sp)
-                                Text(compactMoney(spending), fontWeight = FontWeight.SemiBold, fontSize = if (compactMoney(spending).length > 13) 13.sp else 17.sp, modifier = Modifier.widthIn(max = 132.dp), textAlign = TextAlign.Center)
+                                Text(compactMoney(spending, currency), fontWeight = FontWeight.SemiBold, fontSize = if (compactMoney(spending, currency).length > 13) 13.sp else 17.sp, modifier = Modifier.widthIn(max = 132.dp), textAlign = TextAlign.Center)
                             }
                         }
                         groups.forEach { group ->
@@ -338,7 +359,7 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
                                     Box(Modifier.size(8.dp).clip(CircleShape).background(group.color))
                                     Text(group.name, Modifier.weight(1f).padding(start = 9.dp), fontSize = 13.sp, maxLines = 2)
                                     Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = 8.dp)) {
-                                        Text(compactMoney(group.amount), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                        Text(compactMoney(group.amount, currency), fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                         Text("${(group.amount.toDouble() / spending * 100).toInt()}%", color = Muted, fontSize = 11.sp)
                                     }
                                 }
@@ -351,7 +372,7 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
         }
         item {
             val months = (5 downTo 0).map { month.minusMonths(it.toLong()) }
-            val amounts = months.map { m -> monthlyTotals(state.entries, m, accountId = activeAccount).expense }
+            val amounts = months.map { m -> monthlyTotals(currencyEntries, m, accountId = activeAccount).expense }
             val peak = max(1L, amounts.maxOrNull() ?: 0L)
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 DailySectionHeader("Витрати в динаміці", subtitle = "Останні 6 місяців")
@@ -368,7 +389,7 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
                     months.forEachIndexed { index, m ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(m.format(DateTimeFormatter.ofPattern("LLLL yyyy", uk)), color = Muted, fontSize = 12.sp)
-                            Text(compactMoney(amounts[index]), fontSize = 12.sp)
+                            Text(compactMoney(amounts[index], currency), fontSize = 12.sp)
                         }
                     }
                 }
@@ -387,25 +408,25 @@ private fun DailySurface(padding: Int = 18, content: @Composable ColumnScope.() 
 }
 
 @Composable
-private fun DailyMetric(label: String, value: Long, color: Color, modifier: Modifier = Modifier, amountTag: String? = null) {
+private fun DailyMetric(label: String, value: Long, color: Color, modifier: Modifier = Modifier, amountTag: String? = null, currency: String = "UAH") {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Text(label, fontSize = 11.sp, lineHeight = 16.sp, color = Muted, minLines = 2)
-        Text(compactMoney(value), modifier = Modifier.fillMaxWidth().then(if (amountTag != null) Modifier.testTag(amountTag) else Modifier), fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 23.sp, color = color)
+        Text(compactMoney(value, currency), modifier = Modifier.fillMaxWidth().then(if (amountTag != null) Modifier.testTag(amountTag) else Modifier), fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 23.sp, color = color)
     }
 }
 
 /** Keep the full amount visible instead of truncating it in narrow half-width cells. */
 @Composable
-private fun DailyMetricPair(firstLabel: String, firstValue: Long, firstColor: Color, secondLabel: String, secondValue: Long, secondColor: Color, firstTag: String? = null, secondTag: String? = null) {
+private fun DailyMetricPair(firstLabel: String, firstValue: Long, firstColor: Color, secondLabel: String, secondValue: Long, secondColor: Color, firstTag: String? = null, secondTag: String? = null, currency: String = "UAH") {
     val fontScale = LocalDensity.current.fontScale
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val stack = maxWidth < 260.dp || fontScale > 1.15f || maxOf(compactMoney(firstValue).length, compactMoney(secondValue).length) > 17
+        val stack = maxWidth < 260.dp || fontScale > 1.15f || maxOf(compactMoney(firstValue, currency).length, compactMoney(secondValue, currency).length) > 17
         if (stack) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            DailyMetric(firstLabel, firstValue, firstColor, amountTag = firstTag)
-            DailyMetric(secondLabel, secondValue, secondColor, amountTag = secondTag)
+            DailyMetric(firstLabel, firstValue, firstColor, amountTag = firstTag, currency = currency)
+            DailyMetric(secondLabel, secondValue, secondColor, amountTag = secondTag, currency = currency)
         } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            DailyMetric(firstLabel, firstValue, firstColor, Modifier.weight(1f), firstTag)
-            DailyMetric(secondLabel, secondValue, secondColor, Modifier.weight(1f), secondTag)
+            DailyMetric(firstLabel, firstValue, firstColor, Modifier.weight(1f), firstTag, currency)
+            DailyMetric(secondLabel, secondValue, secondColor, Modifier.weight(1f), secondTag, currency)
         }
     }
 }
@@ -448,7 +469,8 @@ private fun DailyEntryRow(entry: Entry, state: FinanceState, onClick: () -> Unit
             if (entry.note.isNotBlank()) Text(entry.note, color = Muted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Column(horizontalAlignment = Alignment.End, modifier = Modifier.widthIn(max = 135.dp)) {
-            Text(dailyEntryAmount(entry), color = when (entry.kind) { "expense" -> Red; "income" -> Green; else -> Accent }, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.End)
+            Text(dailyEntryAmount(entry, account?.currency ?: "UAH"), color = when (entry.kind) { "expense" -> Red; "income" -> Green; else -> Accent }, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.End)
+            if (entry.targetAmount != null) Text("→ " + compactMoney(entry.targetAmount, state.accounts.find { it.id == entry.targetId }?.currency ?: "UAH"), color = Accent, fontSize = 12.sp, textAlign = TextAlign.End)
             Text(entry.date().format(DateTimeFormatter.ofPattern("HH:mm")), color = Muted, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
         }
         if (onDelete != null) Box {
@@ -461,11 +483,11 @@ private fun DailyEntryRow(entry: Entry, state: FinanceState, onClick: () -> Unit
     }
 }
 
-private fun dailyEntryAmount(entry: Entry): String = when (entry.kind) {
-    "expense" -> "−" + compactMoney(entry.amount)
-    "income" -> "+" + compactMoney(entry.amount)
-    "correction" -> if (entry.amount > 0) "+" + compactMoney(entry.amount) else compactMoney(entry.amount).replaceFirst("-", "−")
-    else -> compactMoney(entry.amount)
+private fun dailyEntryAmount(entry: Entry, currency: String): String = when (entry.kind) {
+    "expense" -> "−" + compactMoney(entry.amount, currency)
+    "income" -> "+" + compactMoney(entry.amount, currency)
+    "correction" -> if (entry.amount > 0) "+" + compactMoney(entry.amount, currency) else compactMoney(entry.amount, currency).replaceFirst("-", "−")
+    else -> compactMoney(entry.amount, currency)
 }
 
 @Composable

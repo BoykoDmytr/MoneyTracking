@@ -133,7 +133,7 @@ class FinanceDatabaseTest {
     @Test fun salaryAndPersonOriginsPersistAcrossDatabaseReopen() = runBlocking {
         val name = "income-origins-test.db"
         app.deleteDatabase(name)
-        val disk = Room.databaseBuilder(app, FinanceDatabase::class.java, name).allowMainThreadQueries().addMigrations(MIGRATION_1_2).build()
+        val disk = Room.databaseBuilder(app, FinanceDatabase::class.java, name).allowMainThreadQueries().addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
         try {
             val repo = FinanceRepository(disk)
             repo.saveAccount(Account(name = "Картка", opening = 0, color = palette[0]))
@@ -141,7 +141,7 @@ class FinanceDatabaseTest {
             repo.saveEntry(Entry(kind = "income", amount = 3000000, accountId = id, time = 1, incomeSource = "salary", sender = "  Роботодавець  "))
             repo.saveEntry(Entry(kind = "income", amount = 35050, accountId = id, time = 2, incomeSource = "person", sender = "  Олена  ", note = "Повернення боргу"))
         } finally { disk.close() }
-        val reopened = Room.databaseBuilder(app, FinanceDatabase::class.java, name).allowMainThreadQueries().addMigrations(MIGRATION_1_2).build()
+        val reopened = Room.databaseBuilder(app, FinanceDatabase::class.java, name).allowMainThreadQueries().addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
         try {
             val state = FinanceRepository(reopened).snapshot()
             assertEquals(listOf("person", "salary"), state.entries.map { it.incomeSource })
@@ -227,7 +227,7 @@ class FinanceDatabaseTest {
             old.execSQL("INSERT INTO entries VALUES (3,'transfer',10000,1,2,NULL,3000,'Переказ')")
             old.version = 1
         }
-        val migrated = Room.databaseBuilder(app, FinanceDatabase::class.java, name).allowMainThreadQueries().addMigrations(MIGRATION_1_2).build()
+        val migrated = Room.databaseBuilder(app, FinanceDatabase::class.java, name).allowMainThreadQueries().addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
         try {
             val repo = FinanceRepository(migrated)
             val state = repo.snapshot()
@@ -239,7 +239,7 @@ class FinanceDatabaseTest {
             assertEquals(listOf("Переказ", "Продукти", "Старий дохід"), state.entries.map { it.note })
             repo.saveAccount(state.accounts[0], desiredBalance = 90000)
             assertEquals(90000L, balance(state.accounts[0], repo.snapshot().entries))
-            assertEquals(2, migrated.openHelper.readableDatabase.version)
+            assertEquals(3, migrated.openHelper.readableDatabase.version)
         } finally { migrated.close(); app.deleteDatabase(name) }
     }
 }

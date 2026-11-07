@@ -1,12 +1,15 @@
 package ua.moneytracking
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.room.*
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
@@ -17,7 +20,7 @@ import java.time.ZoneId
 import java.util.Locale
 
 @Entity(tableName = "accounts")
-data class Account(@PrimaryKey(autoGenerate = true) val id: Long = 0, val name: String, val opening: Long, val color: Long, val cash: Boolean = false, val lastFour: String = "")
+data class Account(@PrimaryKey(autoGenerate = true) val id: Long = 0, val name: String, val opening: Long, val color: Long, val cash: Boolean = false, val lastFour: String = "", @ColumnInfo(defaultValue = "'UAH'") val currency: String = "UAH")
 @Entity(tableName = "categories")
 data class Category(@PrimaryKey(autoGenerate = true) val id: Long = 0, val name: String, val color: Long, val icon: Int)
 @Entity(tableName = "entries", foreignKeys = [
@@ -35,7 +38,8 @@ data class Entry(
     val time: Long,
     val note: String = "",
     @ColumnInfo(defaultValue = "'other'") val incomeSource: String = "other",
-    @ColumnInfo(defaultValue = "''") val sender: String = ""
+    @ColumnInfo(defaultValue = "''") val sender: String = "",
+    @ColumnInfo(defaultValue = "NULL") val targetAmount: Long? = null
 )
 
 val palette = listOf(0xFF927BFA, 0xFF588EF3, 0xFF40BC99, 0xFFEE728E, 0xFFECAF58, 0xFFB678DA, 0xFF57BCCA, 0xFF737C93)
@@ -61,6 +65,9 @@ interface FinanceDao {
     @Delete suspend fun delete(a: Account)
     @Delete suspend fun delete(c: Category)
     @Delete suspend fun delete(e: Entry)
+    @Query("DELETE FROM entries") suspend fun clearEntries()
+    @Query("DELETE FROM accounts") suspend fun clearAccounts()
+    @Query("DELETE FROM categories") suspend fun clearCategories()
 }
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -70,12 +77,19 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [Account::class, Category::class, Entry::class], version = 2, exportSchema = true)
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE accounts ADD COLUMN currency TEXT NOT NULL DEFAULT 'UAH'")
+        db.execSQL("ALTER TABLE entries ADD COLUMN targetAmount INTEGER DEFAULT NULL")
+    }
+}
+
+@Database(entities = [Account::class, Category::class, Entry::class], version = 3, exportSchema = true)
 abstract class FinanceDatabase : RoomDatabase() {
     abstract fun dao(): FinanceDao
     companion object {
         fun open(app: Application): FinanceDatabase = Room.databaseBuilder(app, FinanceDatabase::class.java, "finance.db")
-            .addMigrations(MIGRATION_1_2)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
                     defaultNames.forEachIndexed { i, name ->
@@ -105,6 +119,7 @@ class FinanceRepository(private val database: FinanceDatabase) {
 
     suspend fun saveAccount(account: Account, desiredBalance: Long? = null) = database.withTransaction {
         financeRequire(account.id >= 0 && account.name.isNotBlank() && account.name.trim().length <= 60)
+        financeRequire(account.currency in supportedCurrencies)
         financeRequire(account.cash || account.lastFour.isBlank() || Regex("\\d{4}").matches(account.lastFour))
         val clean = account.copy(name = account.name.trim(), lastFour = if (account.cash) "" else account.lastFour)
         if (account.id == 0L) {
@@ -113,6 +128,7 @@ class FinanceRepository(private val database: FinanceDatabase) {
             dao.save(clean)
         } else {
             val persisted = financeNotNull(dao.account(account.id)) { "Рахунок уже видалено." }
+            financeRequire(account.currency == persisted.currency) { "Валюту наявного рахунку змінити не можна. Створіть окремий рахунок." }
             dao.save(clean.copy(opening = persisted.opening))
             if (desiredBalance != null) {
                 financeRequire(desiredBalance in -MAX_MONEY..MAX_MONEY)
@@ -135,9 +151,10 @@ class FinanceRepository(private val database: FinanceDatabase) {
     suspend fun saveEntry(entry: Entry) = database.withTransaction {
         financeRequire(entry.id >= 0)
         val previous = if (entry.id == 0L) null else financeNotNull(dao.entry(entry.id)) { "Операцію вже видалено." }
-        financeNotNull(dao.account(entry.accountId)) { "Рахунок уже видалено." }
+        val source = financeNotNull(dao.account(entry.accountId)) { "Рахунок уже видалено." }
         financeRequire(entry.note.length <= 500 && entry.sender.length <= 120)
         financeRequire(entry.kind in setOf("expense", "income", "transfer", "correction"))
+        financeRequire(entry.kind != "transfer" || entry.categoryId == null)
         if (entry.kind == "correction") {
             financeRequire(previous?.kind == "correction" && previous.accountId == entry.accountId)
             financeRequire(entry.amount != 0L)
@@ -148,7 +165,10 @@ class FinanceRepository(private val database: FinanceDatabase) {
             financeRequire((entry.kind == "transfer") == (entry.targetId != null))
             financeRequire(entry.targetId != entry.accountId)
         }
-        if (entry.targetId != null) financeNotNull(dao.account(entry.targetId)) { "Рахунок отримувача вже видалено." }
+        val target = entry.targetId?.let { financeNotNull(dao.account(it)) { "Рахунок отримувача вже видалено." } }
+        val crossCurrency = target != null && source.currency != target.currency
+        financeRequire(if (crossCurrency) entry.targetAmount != null && entry.targetAmount in 1..MAX_MONEY
+            else entry.targetAmount == null || (entry.kind == "transfer" && entry.targetAmount == entry.amount)) { "Вкажіть коректний курс і суму зарахування." }
         if (entry.categoryId != null) financeNotNull(dao.category(entry.categoryId)) { "Категорію вже видалено." }
         if (entry.kind == "income") {
             financeRequire(entry.incomeSource in setOf("salary", "person", "other"))
@@ -157,7 +177,8 @@ class FinanceRepository(private val database: FinanceDatabase) {
         val clean = entry.copy(
             note = entry.note.trim(),
             incomeSource = if (entry.kind == "income") entry.incomeSource else "other",
-            sender = if (entry.kind == "income") entry.sender.trim() else ""
+            sender = if (entry.kind == "income") entry.sender.trim() else "",
+            targetAmount = if (crossCurrency) entry.targetAmount else null
         )
         // Detect any overflow before committing rather than storing a broken account balance.
         val futureEntries = dao.allEntries().filterNot { entry.id != 0L && it.id == entry.id } + clean
@@ -168,12 +189,25 @@ class FinanceRepository(private val database: FinanceDatabase) {
     suspend fun deleteAccount(account: Account) = database.withTransaction { dao.delete(account) }
     suspend fun deleteCategory(category: Category) = database.withTransaction { dao.delete(category) }
     suspend fun deleteEntry(entry: Entry) = database.withTransaction { dao.delete(entry) }
+
+    /** Validation precedes deletion; any SQL failure rolls the entire replacement back. */
+    suspend fun restore(backup: FinanceBackup) = database.withTransaction {
+        validateBackup(backup)
+        dao.clearEntries()
+        dao.clearAccounts()
+        dao.clearCategories()
+        backup.state.accounts.forEach { dao.save(it) }
+        backup.state.categories.forEach { dao.save(it) }
+        backup.state.entries.forEach { dao.save(it) }
+    }
 }
 
 class FinanceModel(app: Application) : AndroidViewModel(app) {
     private val database = FinanceDatabase.open(app)
     private val repository = FinanceRepository(database)
     val error = MutableStateFlow<String?>(null)
+    val backupBusy = MutableStateFlow(false)
+    val importPreview = MutableStateFlow<FinanceBackup?>(null)
     val state = repository.observeState()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FinanceState())
     private fun run(action: suspend () -> Unit, onSuccess: () -> Unit) = viewModelScope.launch {
@@ -188,6 +222,36 @@ class FinanceModel(app: Application) : AndroidViewModel(app) {
     fun delete(a: Account, onSuccess: () -> Unit = {}) = run({ repository.deleteAccount(a) }, onSuccess)
     fun delete(c: Category, onSuccess: () -> Unit = {}) = run({ repository.deleteCategory(c) }, onSuccess)
     fun delete(e: Entry, onSuccess: () -> Unit = {}) = run({ repository.deleteEntry(e) }, onSuccess)
+    private fun fileAction(action: suspend () -> Unit) {
+        if (backupBusy.value) return
+        backupBusy.value = true
+        viewModelScope.launch {
+            try { action() }
+            catch (e: CancellationException) { throw e }
+            catch (e: BackupException) { error.value = e.message }
+            catch (_: Exception) { error.value = "Не вдалося прочитати або записати копію. Перевірте доступ до файлу й вільне місце та спробуйте ще раз." }
+            finally { backupBusy.value = false }
+        }
+    }
+    fun exportTo(uri: Uri, preferences: UserPreferences, onSuccess: () -> Unit) = fileAction {
+        val snapshot = repository.snapshot()
+        val safePreferences = preferences.copy(defaultAccountId = preferences.defaultAccountId?.takeIf { id -> snapshot.accounts.any { it.id == id } })
+        withContext(Dispatchers.IO) {
+            BackupFiles.write(getApplication<Application>().contentResolver, uri, BackupCodec.encode(FinanceBackup(snapshot, safePreferences)))
+        }
+        onSuccess()
+    }
+    fun prepareImport(uri: Uri) = fileAction {
+        importPreview.value = withContext(Dispatchers.IO) { BackupFiles.read(getApplication<Application>().contentResolver, uri) }
+    }
+    fun dismissImport() { if (!backupBusy.value) importPreview.value = null }
+    fun confirmImport(onSuccess: (UserPreferences) -> Unit) = fileAction {
+        val backup = importPreview.value ?: return@fileAction
+        repository.restore(backup)
+        savePreferences(getApplication(), backup.preferences)
+        importPreview.value = null
+        onSuccess(backup.preferences)
+    }
     override fun onCleared() { database.close() }
 }
 
@@ -214,21 +278,30 @@ fun monthlyTotals(entries: List<Entry>, month: YearMonth, zone: ZoneId = ZoneId.
     return MonthlyTotals(income, expense)
 }
 
-// Every amount is an integer number of kopecks. Limit input to avoid Long overflow.
+// Every currency uses integer minor units (1/100). Limit input to avoid Long overflow.
 fun parseMoney(raw: String): Long? = try {
     val clean = raw.trim().replace(" ", "").replace("\u00a0", "").replace("\u202f", "").replace('−', '-').replace(',', '.')
     if (!Regex("-?\\d{1,10}(\\.\\d{1,2})?").matches(clean)) null
     else BigDecimal(clean).movePointRight(2).longValueExact()
 } catch (_: Exception) { null }
-fun money(value: Long): String {
+val supportedCurrencies = listOf("UAH", "USD", "EUR")
+fun currencyUnit(currency: String): String = when (currency) { "USD" -> "$"; "EUR" -> "€"; else -> "грн" }
+fun currencyName(currency: String): String = when (currency) { "USD" -> "USD · Долар США"; "EUR" -> "EUR · Євро"; else -> "UAH · Гривня" }
+fun money(value: Long, currency: String = "UAH"): String {
     val symbols = DecimalFormatSymbols(Locale.forLanguageTag("uk-UA")).apply { groupingSeparator = ' '; decimalSeparator = ',' }
-    return DecimalFormat("#,##0.00", symbols).format(BigDecimal.valueOf(value, 2)) + " грн"
+    return DecimalFormat("#,##0.00", symbols).format(BigDecimal.valueOf(value, 2)) + " " + currencyUnit(currency)
 }
 fun editableMoney(value: Long): String = BigDecimal.valueOf(value, 2).toPlainString()
 fun delta(entry: Entry, account: Long): Long = when (entry.kind) {
     "income", "correction" -> if (entry.accountId == account) entry.amount else 0
     "expense" -> if (entry.accountId == account) Math.negateExact(entry.amount) else 0
-    "transfer" -> when (account) { entry.accountId -> Math.negateExact(entry.amount); entry.targetId -> entry.amount; else -> 0 }
+    "transfer" -> when (account) { entry.accountId -> Math.negateExact(entry.amount); entry.targetId -> entry.targetAmount ?: entry.amount; else -> 0 }
     else -> 0
 }
 fun balance(account: Account, entries: List<Entry>): Long = entries.fold(account.opening) { total, entry -> Math.addExact(total, delta(entry, account.id)) }
+
+fun FinanceState.currencies(): List<String> = supportedCurrencies.filter { c -> accounts.any { it.currency == c } }.ifEmpty { listOf("UAH") }
+fun FinanceState.entriesInCurrency(currency: String): List<Entry> {
+    val ids = accounts.filter { it.currency == currency }.map { it.id }.toSet()
+    return entries.filter { it.accountId in ids }
+}

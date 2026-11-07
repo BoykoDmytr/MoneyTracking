@@ -34,7 +34,10 @@ internal fun SettingsScreen(
     onDeleteAccount: (Account) -> Unit,
     onAddCategory: () -> Unit,
     onEditCategory: (Category) -> Unit,
-    onDeleteCategory: (Category) -> Unit
+    onDeleteCategory: (Category) -> Unit,
+    backupBusy: Boolean = false,
+    onExport: () -> Unit = {},
+    onImport: () -> Unit = {}
 ) {
     var section by rememberSaveable { mutableStateOf("general") }
     BackHandler(enabled = section != "general") { section = "general" }
@@ -78,7 +81,7 @@ internal fun SettingsScreen(
                                     Text(if (account.cash) "Готівка" else "Банківська картка" + if (account.lastFour.isBlank()) "" else " · ${account.lastFour}", color = Muted, fontSize = 12.sp)
                                 }
                             }
-                            Text(money(balance(account, state.entries)), fontSize = 24.sp, fontWeight = FontWeight.Medium)
+                            Text("${account.currency} · ${money(balance(account, state.entries), account.currency)}", fontSize = 24.sp, fontWeight = FontWeight.Medium)
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 TextButton(onClick = { onEditAccount(account) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 0.dp)) {
                                     Icon(Icons.Default.Edit, null, Modifier.size(17.dp))
@@ -127,6 +130,21 @@ internal fun SettingsScreen(
                             SettingsLink(Icons.Default.Category, "Категорії", "${state.categories.size} · іконки, кольори та назви") { section = "categories" }
                         }
                     }
+                    item { SettingsSectionLabel("РЕЗЕРВНА КОПІЯ") }
+                    item {
+                        SettingsCard {
+                            Text("Імпорт і експорт", fontWeight = FontWeight.Medium, fontSize = 16.sp)
+                            Text("JSON-файл з усіма рахунками, валютами, категоріями, операціями й налаштуваннями. Оберіть місце на телефоні або у власному хмарному сховищі.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+                            Button(onClick = onExport, enabled = !backupBusy, modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Default.FileUpload, null, Modifier.size(19.dp)); Spacer(Modifier.width(8.dp)); Text("Експортувати копію")
+                            }
+                            OutlinedButton(onClick = onImport, enabled = !backupBusy, modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Default.FileDownload, null, Modifier.size(19.dp)); Spacer(Modifier.width(8.dp)); Text("Імпортувати копію")
+                            }
+                            Text(if (backupBusy) "Обробляємо копію…" else "Імпорт замінює поточні дані після підтвердження. Ліміт файлу — 32 МБ. Копія містить фінансові дані: зберігайте її у приватному місці.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+                            if (backupBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
                     item { SettingsSectionLabel("ШВИДКЕ ДОДАВАННЯ") }
                     item {
                         SettingsCard {
@@ -160,11 +178,11 @@ internal fun SettingsScreen(
                     item {
                         SettingsCard {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Мова", color = Muted, fontSize = 13.sp); Text("Українська", fontSize = 13.sp) }
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Валюта", color = Muted, fontSize = 13.sp); Text("Гривня · UAH", fontSize = 13.sp) }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Валюти", color = Muted, fontSize = 13.sp); Text("UAH · USD · EUR", fontSize = 13.sp) }
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Оформлення", color = Muted, fontSize = 13.sp); Text("Темна тема", fontSize = 13.sp) }
                             HorizontalDivider(color = Muted.copy(alpha = .12f), modifier = Modifier.padding(vertical = 4.dp))
                             Text("Ваші дані залишаються на телефоні", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                            Text("Без сервера, реклами та банківських підключень. Очищення даних або видалення застосунку видалить фінансову історію. Автоматичного резервного копіювання немає.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+                            Text("Без сервера, реклами та банківських підключень. Перед очищенням даних чи видаленням застосунку експортуйте резервну копію. Автоматичного резервного копіювання немає.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
                         }
                     }
                 }
@@ -232,12 +250,12 @@ private fun AccountPreferencePicker(accounts: List<Account>, selectedId: Long?, 
     Box {
         OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
             Icon(Icons.Default.CreditCard, null, modifier = Modifier.size(19.dp))
-            Text(accounts.find { it.id == selectedId }?.name ?: "Перший доступний рахунок", Modifier.weight(1f).padding(horizontal = 10.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+            Text(accounts.find { it.id == selectedId }?.let { "${it.name} · ${it.currency}" } ?: "Перший доступний рахунок", Modifier.weight(1f).padding(horizontal = 10.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
             Icon(Icons.Default.ExpandMore, null, modifier = Modifier.size(20.dp))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.heightIn(max = 300.dp)) {
             DropdownMenuItem(text = { Text("Перший доступний рахунок") }, onClick = { select(null); expanded = false })
-            accounts.forEach { account -> DropdownMenuItem(text = { Text(account.name) }, onClick = { select(account.id); expanded = false }) }
+            accounts.forEach { account -> DropdownMenuItem(text = { Text("${account.name} · ${account.currency}") }, onClick = { select(account.id); expanded = false }) }
         }
     }
 }

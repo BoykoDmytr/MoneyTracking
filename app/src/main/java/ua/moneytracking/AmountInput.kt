@@ -42,4 +42,7 @@ object AmountInput {
     } catch (_: ArithmeticException) { null }
 }
 
-fun compactMoney(value: Long): String = money(value).removeSuffix(",00 грн") + if (value % 100L == 0L) " грн" else ""
+fun compactMoney(value: Long, currency: String = "UAH"): String {
+    val unit = currencyUnit(currency)
+    return money(value, currency).removeSuffix(",00 $unit") + if (value % 100L == 0L) " $unit" else ""
+}
