@@ -44,3 +44,5 @@ SDK задайте через `ANDROID_HOME` або локальний `local.pr
 Основний CI збирає й тестує застосунок. Для релізу скопіюйте перевірений локальний APK у `releases/Moi-Finansy-debug.apk`, оновіть `(cd releases && sha256sum Moi-Finansy-debug.apk > SHA256SUMS)`, закомітьте та запуште відповідний тег, наприклад `v2.2.0`.
 
 Workflow **Publish Android Release** перевіряє пакет, версію, checksum і `releases/SIGNING_CERTIFICATE_SHA256`, після чого публікує APK та checksum. Використовується саме закомічений APK: повторна debug-збірка на чистому runner створила б інший ключ і завадила оновленню встановленого застосунку. Приватний ключ до Git не додається.
+
+CI встановлює перевірений SDK через `scripts/setup-android-ci.sh`, незалежно від образу runner. Якщо потрібно повторити лише публікацію існуючого тегу, запустіть **Publish Android Release** вручну з main. Для виправлення інфраструктури також підтримується commit із позначкою `[publish-release]` у main; APK має точно збігатися з APK відповідного тегу.
