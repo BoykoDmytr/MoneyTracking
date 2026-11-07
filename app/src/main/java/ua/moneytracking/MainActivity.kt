@@ -46,7 +46,7 @@ internal val Green = Color(0xFF70D9AD)
 internal val uk = Locale.forLanguageTag("uk-UA")
 internal fun Entry.date() = Instant.ofEpochMilli(time).atZone(ZoneId.systemDefault()).toLocalDateTime()
 internal fun Entry.inMonth(month: YearMonth) = YearMonth.from(date()) == month
-internal fun kindName(kind: String) = when (kind) { "income" -> "Дохід"; "transfer" -> "Переказ"; else -> "Витрата" }
+internal fun kindName(kind: String) = when (kind) { "income" -> "Дохід"; "transfer" -> "Переказ"; "correction" -> "Корекція"; else -> "Витрата" }
 internal fun categoryIcon(i: Int): ImageVector = when (i % 12) {
     0 -> Icons.Default.Restaurant
     1 -> Icons.Default.LocalCafe
@@ -100,6 +100,7 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
     val context = LocalContext.current
     val state by model.state.collectAsState()
     val error by model.error.collectAsState()
+    var writePending by remember { mutableStateOf(false) }
     var preferences by remember { mutableStateOf(loadPreferences(context)) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var monthText by rememberSaveable { mutableStateOf(YearMonth.now().toString()) }
@@ -134,18 +135,33 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
     }
     fun deleteAccount(account: Account) {
         confirm = "Видалити «${account.name}» та всі пов’язані операції? Власні перекази теж буде видалено, а баланси інших рахунків перераховано." to {
-            model.delete(account)
-            if (preferences.defaultAccountId == account.id) {
-                preferences = preferences.copy(defaultAccountId = null)
-                savePreferences(context, preferences)
+            if (!writePending) {
+                writePending = true
+                model.delete(account) {
+                    writePending = false
+                    if (preferences.defaultAccountId == account.id) {
+                        preferences = preferences.copy(defaultAccountId = null)
+                        savePreferences(context, preferences)
+                    }
+                }
             }
         }
     }
     fun deleteCategory(category: Category) {
-        confirm = "Видалити категорію «${category.name}»? Її операції залишаться в історії без категорії." to { model.delete(category); categoryOpen = false }
+        confirm = "Видалити категорію «${category.name}»? Її операції залишаться в історії без категорії." to {
+            if (!writePending) {
+                writePending = true
+                model.delete(category) { writePending = false; categoryOpen = false }
+            }
+        }
     }
     fun deleteEntry(entry: Entry) {
-        confirm = "Видалити цю операцію? Баланси й статистику буде перераховано." to { model.delete(entry); entryOpen = false }
+        confirm = "Видалити цю операцію? Баланси й статистику буде перераховано." to {
+            if (!writePending) {
+                writePending = true
+                model.delete(entry) { writePending = false; entryOpen = false }
+            }
+        }
     }
 
     LaunchedEffect(state.accounts.size, returnToOverviewAfterAccount) {
@@ -154,7 +170,7 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
             returnToOverviewAfterAccount = false
         }
     }
-    LaunchedEffect(error) { error?.let { snack.showSnackbar(it); model.error.value = null } }
+    LaunchedEffect(error) { if (error != null) writePending = false }
     Scaffold(
         containerColor = Bg,
         snackbarHost = { SnackbarHost(snack) },
@@ -230,15 +246,32 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
         }
     }
     // Configuration dialogs are reachable only from Settings or explicit first-run onboarding.
-    if (tab == 3 && accountOpen) AccountForm(accountForm, state, { accountOpen = false; returnToOverviewAfterAccount = false }) { model.save(it); accountOpen = false }
-    if (tab == 3 && categoryOpen) CategoryForm(categoryForm, { categoryOpen = false }, categoryForm?.let { c -> { deleteCategory(c) } }) { model.save(it); categoryOpen = false }
+    if (tab == 3 && accountOpen) AccountForm(accountForm, state, { accountOpen = false; returnToOverviewAfterAccount = false }) { account, desiredBalance ->
+        if (!writePending) {
+            writePending = true
+            model.save(account, desiredBalance) { writePending = false; accountOpen = false }
+        }
+    }
+    if (tab == 3 && categoryOpen) CategoryForm(categoryForm, { categoryOpen = false }, categoryForm?.let { c -> { deleteCategory(c) } }) { category ->
+        if (!writePending) {
+            writePending = true
+            model.save(category) { writePending = false; categoryOpen = false }
+        }
+    }
+    fun saveEntry(entry: Entry) {
+        if (!writePending) {
+            writePending = true
+            model.save(entry) {
+                monthText = YearMonth.from(entry.date()).toString()
+                writePending = false
+                entryOpen = false
+            }
+        }
+    }
     val original = state.entries.find { it.id == entryId }
     if (entryOpen && state.ready && state.accounts.isNotEmpty() && (entryId == null || original != null)) {
-        EntrySheet(original, state, draftCategory, draftKind, preferences, { entryOpen = false }, original?.let { e -> { deleteEntry(e) } }) {
-            model.save(it)
-            monthText = YearMonth.from(it.date()).toString()
-            entryOpen = false
-        }
+        if (original?.kind == "correction") CorrectionForm(original, state, { entryOpen = false }, ::saveEntry)
+        else EntrySheet(original, state, draftCategory, draftKind, preferences, { entryOpen = false }, original?.let { e -> { deleteEntry(e) } }, ::saveEntry)
     }
     confirm?.let { (message, action) ->
         AlertDialog(
@@ -247,6 +280,12 @@ internal fun FinanceApp(model: FinanceModel = viewModel()) {
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Скасувати") } }
         )
     }
+    if (error != null) AlertDialog(
+        onDismissRequest = { model.error.value = null },
+        title = { Text("Не вдалося виконати дію") },
+        text = { Text(error.orEmpty()) },
+        confirmButton = { TextButton(onClick = { model.error.value = null }) { Text("Гаразд") } }
+    )
 }
 
 @Composable

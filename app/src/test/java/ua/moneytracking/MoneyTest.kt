@@ -4,6 +4,8 @@ import org.junit.Test
 class MoneyTest {
     @Test fun moneyParsingIsExact() {
         assertEquals(125050L, parseMoney("1 250,50"))
+        assertEquals(125050L, parseMoney("1\u202f250,50"))
+        assertEquals(-125050L, parseMoney("−1\u00a0250,50"))
         assertEquals(10L, parseMoney("0.10"))
         assertNull(parseMoney("1.999")); assertNull(parseMoney("NaN")); assertNull(parseMoney("999999999999999999"))
         assertEquals("1 250,50 грн", money(125050))
@@ -34,6 +36,10 @@ class MoneyTest {
         assertEquals("0,", AmountInput.key("", ","))
         assertEquals("0,50", AmountInput.key("0,50", ","))
         assertEquals("5×", AmountInput.key("2+3", "×"))
+        val negativeIntermediate = AmountInput.key("10−20", "+")
+        assertEquals("-10+", negativeIntermediate)
+        assertEquals(2000L, AmountInput.evaluate(negativeIntermediate + "30"))
+        assertEquals(-1000L, AmountInput.evaluate("10−20"))
         assertEquals("637 грн", compactMoney(63700))
         assertEquals("637,50 грн", compactMoney(63750))
     }

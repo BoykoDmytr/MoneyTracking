@@ -27,7 +27,7 @@ object AmountInput {
     }
     fun evaluate(expression: String): Long? = try {
         val normalized = expression.replace(',', '.')
-        val match = Regex("(\\d{1,10}(?:\\.\\d{0,2})?)(?:([+−×÷])(\\d{1,10}(?:\\.\\d{0,2})?))?").matchEntire(normalized)
+        val match = Regex("(-?\\d{1,10}(?:\\.\\d{0,2})?)(?:([+−×÷])(\\d{1,10}(?:\\.\\d{0,2})?))?").matchEntire(normalized)
         if (match == null) null else {
             val left = BigDecimal(match.groupValues[1])
             val right = match.groupValues[3].takeIf { it.isNotEmpty() }?.let { BigDecimal(it) }

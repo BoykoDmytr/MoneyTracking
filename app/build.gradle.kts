@@ -7,8 +7,9 @@ plugins {
 android {
     namespace = "ua.moneytracking"
     compileSdk = 35
-    defaultConfig { applicationId = "ua.moneytracking"; minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "2.1" }
+    defaultConfig { applicationId = "ua.moneytracking"; minSdk = 26; targetSdk = 35; versionCode = 5; versionName = "2.2" }
     buildFeatures { compose = true }
+    bundle { language { enableSplit = false } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     testOptions { unitTests.isIncludeAndroidResources = true }

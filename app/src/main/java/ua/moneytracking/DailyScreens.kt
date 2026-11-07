@@ -27,6 +27,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -58,8 +60,9 @@ internal fun OverviewScreen(
     onStart: () -> Unit
 ) {
     val monthEntries = state.entries.filter { it.inMonth(month) }
-    val spending = monthEntries.filter { it.kind == "expense" }.sumOf { it.amount }
-    val income = monthEntries.filter { it.kind == "income" }.sumOf { it.amount }
+    val totals = monthlyTotals(state.entries, month)
+    val spending = totals.expense
+    val income = totals.income
     val recent = monthEntries.sortedWith(compareByDescending<Entry> { it.time }.thenByDescending { it.id }).take(3)
     val categoryTotals = state.categories.associate { c ->
         c.id to monthEntries.filter { it.kind == "expense" && it.categoryId == c.id }.sumOf { it.amount }
@@ -102,7 +105,7 @@ internal fun OverviewScreen(
                 }
             }
         }
-        item { DailyBalanceHero(state, preferences, spending, income) }
+        item { DailyBalanceHero(state, preferences, month, spending, income) }
         if (state.accounts.isNotEmpty()) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -132,7 +135,7 @@ internal fun OverviewScreen(
                                 Column(Modifier.width(108.dp).padding(horizontal = 10.dp, vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(9.dp)) {
                                     CategoryBadge(category, Modifier.size(40.dp))
                                     Text(category.name, fontSize = 12.sp, textAlign = TextAlign.Center, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Text(compactMoney(categoryTotals[category.id] ?: 0L), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Muted, textAlign = TextAlign.Center, maxLines = 2)
+                                    Text(compactMoney(categoryTotals[category.id] ?: 0L), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Muted, textAlign = TextAlign.Center)
                                 }
                             }
                         }
@@ -156,7 +159,7 @@ internal fun OverviewScreen(
 }
 
 @Composable
-private fun DailyBalanceHero(state: FinanceState, preferences: UserPreferences, spending: Long, income: Long) {
+private fun DailyBalanceHero(state: FinanceState, preferences: UserPreferences, month: YearMonth, spending: Long, income: Long) {
     Surface(shape = RoundedCornerShape(28.dp), color = Color.Transparent) {
         Column(
             Modifier.fillMaxWidth()
@@ -176,13 +179,13 @@ private fun DailyBalanceHero(state: FinanceState, preferences: UserPreferences, 
                 if (preferences.hideBalance) "•••• грн" else compactMoney(total),
                 color = Color(0xFFF1FFF6), fontWeight = FontWeight.SemiBold,
                 fontSize = if (compactMoney(total).length > 18) 27.sp else 36.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis
+                lineHeight = if (compactMoney(total).length > 18) 35.sp else 44.sp
             )
+            Text("Поточний баланс усіх рахунків", fontSize = 11.sp, lineHeight = 16.sp, color = Color(0xFFC2DCD0))
             HorizontalDivider(color = Accent.copy(alpha = .15f))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                DailyMetric("Витрачено за місяць", spending, Red, Modifier.weight(1f))
-                DailyMetric("Отримано за місяць", income, Green, Modifier.weight(1f))
-            }
+            Text(month.format(DateTimeFormatter.ofPattern("LLLL yyyy", uk)).replaceFirstChar { it.titlecase(uk) }, color = Color(0xFFC2DCD0), fontSize = 12.sp, lineHeight = 17.sp)
+            DailyMetricPair("Витрачено за місяць", spending, Red, "Отримано за місяць", income, Green, "overview-monthly-expense", "overview-monthly-income")
+            Text("Власні перекази та корекції не входять у доходи й витрати.", fontSize = 10.sp, lineHeight = 15.sp, color = Color(0xFFADC9BB))
         }
     }
 }
@@ -208,7 +211,7 @@ internal fun TransactionsScreen(
             (activeAccount == null || e.accountId == activeAccount || e.targetId == activeAccount) &&
             (kind == "all" || e.kind == kind) &&
             (activeCategory == null || e.categoryId == activeCategory) &&
-            (search.isBlank() || listOf(e.note, accountNames[e.accountId].orEmpty(), accountNames[e.targetId].orEmpty(), categoryNames[e.categoryId].orEmpty(), compactMoney(e.amount), kindName(e.kind)).any { it.contains(search.trim(), ignoreCase = true) })
+            (search.isBlank() || listOf(e.note, accountNames[e.accountId].orEmpty(), accountNames[e.targetId].orEmpty(), categoryNames[e.categoryId].orEmpty(), compactMoney(e.amount), kindName(e.kind), if (e.kind == "income") incomeSourceLabel(e.incomeSource) else "", if (e.kind == "income") e.sender else "").any { it.contains(search.trim(), ignoreCase = true) })
     }.sortedWith(compareByDescending<Entry> { it.time }.thenByDescending { it.id })
     val monthStart = month.atDay(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
     val monthEnd = month.plusMonths(1).atDay(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -234,9 +237,9 @@ internal fun TransactionsScreen(
                     exit = shrinkVertically(tween(150)) + fadeOut(tween(100))
                 ) {
                     Column(Modifier.padding(top = 15.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
-                        OutlinedTextField(value = search, onValueChange = { search = it.take(100) }, placeholder = { Text("Коментар, категорія або сума") }, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = if (search.isNotBlank()) ({ IconButton(onClick = { search = "" }) { Icon(Icons.Default.Close, "Очистити пошук") } }) else null, singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = search, onValueChange = { search = it.take(100) }, placeholder = { Text("Коментар, джерело, категорія або сума") }, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = if (search.isNotBlank()) ({ IconButton(onClick = { search = "" }) { Icon(Icons.Default.Close, "Очистити пошук") } }) else null, singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth())
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            DailySelect("Тип", kind, listOf("all" to "Усі типи", "expense" to "Витрати", "income" to "Доходи", "transfer" to "Перекази"), Modifier.weight(1f)) { kind = it }
+                            DailySelect("Тип", kind, listOf("all" to "Усі типи", "expense" to "Витрати", "income" to "Доходи", "transfer" to "Перекази", "correction" to "Корекції"), Modifier.weight(1f)) { kind = it }
                             DailySelect("Категорія", activeCategory, listOf(null to "Усі категорії") + state.categories.map { it.id to it.name }, Modifier.weight(1f)) { categoryId = it }
                         }
                         AnimatedVisibility(visible = hasFilters, enter = expandVertically(tween(150)) + fadeIn(tween(120)), exit = shrinkVertically(tween(120)) + fadeOut(tween(90))) {
@@ -248,10 +251,7 @@ internal fun TransactionsScreen(
         }
         item {
             DailySurface {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    DailyMetric("На початок місяця", opening, MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
-                    DailyMetric("На кінець місяця", closing, Accent, Modifier.weight(1f))
-                }
+                DailyMetricPair("На початок місяця", opening, MaterialTheme.colorScheme.onSurface, "На кінець місяця", closing, Accent)
                 if (hasFilters && (activeCategory != null || kind != "all" || search.isNotBlank())) Text("Залишки показано за всіма операціями вибраних рахунків.", fontSize = 11.sp, lineHeight = 16.sp, color = Muted)
             }
         }
@@ -262,7 +262,7 @@ internal fun TransactionsScreen(
             item(key = "day-$date") {
                 val net = dayEntries.sumOf { entry ->
                     if (activeAccount != null) delta(entry, activeAccount)
-                    else when (entry.kind) { "expense" -> -entry.amount; "income" -> entry.amount; else -> 0L }
+                    else when (entry.kind) { "expense" -> -entry.amount; "income", "correction" -> entry.amount; else -> 0L }
                 }
                 Row(Modifier.animateItem(fadeInSpec = tween(160), placementSpec = tween(180), fadeOutSpec = tween(100)).fillMaxWidth().padding(top = 8.dp, bottom = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column {
@@ -287,8 +287,9 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
     val activeAccount = accountId?.takeIf { id -> state.accounts.any { it.id == id } }
     val scoped = state.entries.filter { activeAccount == null || it.accountId == activeAccount || it.targetId == activeAccount }
     val selected = scoped.filter { it.inMonth(month) }
-    val spending = selected.filter { it.kind == "expense" }.sumOf { it.amount }
-    val income = selected.filter { it.kind == "income" }.sumOf { it.amount }
+    val totals = monthlyTotals(state.entries, month, accountId = activeAccount)
+    val spending = totals.expense
+    val income = totals.income
     val difference = income - spending
     val groups = selected.filter { it.kind == "expense" }.groupBy { it.categoryId }.map { (id, entries) ->
         val category = state.categories.find { it.id == id }
@@ -307,11 +308,8 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
                 Text("Результат місяця", color = Muted, fontSize = 14.sp)
                 Text((if (difference > 0) "+" else "") + compactMoney(difference), fontSize = 30.sp, fontWeight = FontWeight.SemiBold, color = if (difference < 0) Red else Green)
                 HorizontalDivider(color = DailyBorder)
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    DailyMetric("Доходи", income, Green, Modifier.weight(1f))
-                    DailyMetric("Витрати", spending, Red, Modifier.weight(1f))
-                }
-                Text("Перекази між власними рахунками не враховуються.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+                DailyMetricPair("Доходи", income, Green, "Витрати", spending, Red, "insights-monthly-income", "insights-monthly-expense")
+                Text("Власні перекази та корекції балансу не враховуються.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
             }
         }
         item {
@@ -353,7 +351,7 @@ internal fun InsightsScreen(state: FinanceState, month: YearMonth) {
         }
         item {
             val months = (5 downTo 0).map { month.minusMonths(it.toLong()) }
-            val amounts = months.map { m -> scoped.filter { it.kind == "expense" && it.inMonth(m) }.sumOf { it.amount } }
+            val amounts = months.map { m -> monthlyTotals(state.entries, m, accountId = activeAccount).expense }
             val peak = max(1L, amounts.maxOrNull() ?: 0L)
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 DailySectionHeader("Витрати в динаміці", subtitle = "Останні 6 місяців")
@@ -389,10 +387,26 @@ private fun DailySurface(padding: Int = 18, content: @Composable ColumnScope.() 
 }
 
 @Composable
-private fun DailyMetric(label: String, value: Long, color: Color, modifier: Modifier = Modifier) {
+private fun DailyMetric(label: String, value: Long, color: Color, modifier: Modifier = Modifier, amountTag: String? = null) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Text(label, fontSize = 11.sp, lineHeight = 16.sp, color = Muted)
-        Text(compactMoney(value), fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = color, maxLines = 2)
+        Text(label, fontSize = 11.sp, lineHeight = 16.sp, color = Muted, minLines = 2)
+        Text(compactMoney(value), modifier = Modifier.fillMaxWidth().then(if (amountTag != null) Modifier.testTag(amountTag) else Modifier), fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 23.sp, color = color)
+    }
+}
+
+/** Keep the full amount visible instead of truncating it in narrow half-width cells. */
+@Composable
+private fun DailyMetricPair(firstLabel: String, firstValue: Long, firstColor: Color, secondLabel: String, secondValue: Long, secondColor: Color, firstTag: String? = null, secondTag: String? = null) {
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val stack = maxWidth < 260.dp || fontScale > 1.15f || maxOf(compactMoney(firstValue).length, compactMoney(secondValue).length) > 17
+        if (stack) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            DailyMetric(firstLabel, firstValue, firstColor, amountTag = firstTag)
+            DailyMetric(secondLabel, secondValue, secondColor, amountTag = secondTag)
+        } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            DailyMetric(firstLabel, firstValue, firstColor, Modifier.weight(1f), firstTag)
+            DailyMetric(secondLabel, secondValue, secondColor, Modifier.weight(1f), secondTag)
+        }
     }
 }
 
@@ -426,14 +440,15 @@ private fun DailyEntryRow(entry: Entry, state: FinanceState, onClick: () -> Unit
     val account = state.accounts.find { it.id == entry.accountId }
     var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick).padding(start = 14.dp, end = if (onDelete == null) 14.dp else 2.dp, top = 15.dp, bottom = 15.dp), verticalAlignment = Alignment.CenterVertically) {
-        CategoryBadge(if (entry.kind == "transfer") null else category, Modifier.size(43.dp))
+        DailyEntryBadge(entry, category)
         Column(Modifier.weight(1f).padding(horizontal = 11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(if (entry.kind == "transfer") "Переказ" else category?.name ?: kindName(entry.kind), fontWeight = FontWeight.Medium, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(when (entry.kind) { "income" -> incomeSourceLabel(entry.incomeSource); "correction" -> "Корекція"; "transfer" -> "Переказ"; else -> category?.name ?: kindName(entry.kind) }, fontWeight = FontWeight.Medium, fontSize = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text((account?.name ?: "Рахунок") + if (entry.targetId != null) " → ${state.accounts.find { it.id == entry.targetId }?.name.orEmpty()}" else "", color = Muted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (entry.kind == "income" && entry.sender.isNotBlank()) Text((if (entry.incomeSource == "salary") "Роботодавець: " else "Від: ") + entry.sender, color = Green, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (entry.note.isNotBlank()) Text(entry.note, color = Muted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Column(horizontalAlignment = Alignment.End, modifier = Modifier.widthIn(max = 135.dp)) {
-            Text((if (entry.kind == "expense") "−" else if (entry.kind == "income") "+" else "") + compactMoney(entry.amount), color = when (entry.kind) { "expense" -> Red; "income" -> Green; else -> Accent }, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, textAlign = TextAlign.End)
+            Text(dailyEntryAmount(entry), color = when (entry.kind) { "expense" -> Red; "income" -> Green; else -> Accent }, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.End)
             Text(entry.date().format(DateTimeFormatter.ofPattern("HH:mm")), color = Muted, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
         }
         if (onDelete != null) Box {
@@ -443,6 +458,30 @@ private fun DailyEntryRow(entry: Entry, state: FinanceState, onClick: () -> Unit
                 DropdownMenuItem(text = { Text("Видалити", color = Red) }, onClick = { menu = false; onDelete() })
             }
         }
+    }
+}
+
+private fun dailyEntryAmount(entry: Entry): String = when (entry.kind) {
+    "expense" -> "−" + compactMoney(entry.amount)
+    "income" -> "+" + compactMoney(entry.amount)
+    "correction" -> if (entry.amount > 0) "+" + compactMoney(entry.amount) else compactMoney(entry.amount).replaceFirst("-", "−")
+    else -> compactMoney(entry.amount)
+}
+
+@Composable
+private fun DailyEntryBadge(entry: Entry, category: Category?) {
+    if (entry.kind == "expense") {
+        CategoryBadge(category, Modifier.size(43.dp))
+        return
+    }
+    val color = if (entry.kind == "income") Green else Accent
+    val icon = when (entry.kind) {
+        "income" -> when (entry.incomeSource) { "salary" -> Icons.Default.WorkOutline; "person" -> Icons.Default.PersonOutline; else -> Icons.Default.SouthWest }
+        "correction" -> Icons.Default.Tune
+        else -> Icons.Default.SwapHoriz
+    }
+    Box(Modifier.size(43.dp).clip(RoundedCornerShape(13.dp)).background(color.copy(alpha = .13f)), contentAlignment = Alignment.Center) {
+        Icon(icon, null, tint = color, modifier = Modifier.size(24.dp))
     }
 }
 

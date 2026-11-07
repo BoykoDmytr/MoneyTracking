@@ -1,0 +1,70 @@
+name: Publish Android Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify the committed installable APK
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test -f releases/Moi-Finansy-debug.apk
+          (cd releases && sha256sum --check SHA256SUMS)
+          signer=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          test -n "$signer"
+          "$signer" verify --verbose --print-certs releases/Moi-Finansy-debug.apk | tee /tmp/apk-verification.txt
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/apk-verification.txt)
+          expected=$(tr -d '\r\n' < releases/SIGNING_CERTIFICATE_SHA256)
+          test "$actual" = "$expected"
+          aapt="$(dirname "$signer")/aapt"
+          "$aapt" dump badging releases/Moi-Finansy-debug.apk > /tmp/apk-metadata.txt
+          grep -q "name='ua.moneytracking'" /tmp/apk-metadata.txt
+          version=$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" /tmp/apk-metadata.txt | head -n 1)
+          test "$RELEASE_TAG" = "v$version" || test "$RELEASE_TAG" = "v$version.0"
+      - name: Publish APK and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/release-notes.md <<'NOTES'
+          ## Мої Фінанси
+
+          Встановлюваний Android APK українською, Android 8.0 або новіший. Застосунок працює офлайн.
+
+          ### Що нового
+          - Надходження із джерелом: зарплата, переказ від людини або інше; можна вказати роботодавця чи відправника.
+          - Зміни балансу в налаштуваннях потрапляють до історії як корекції.
+          - Узгоджені місячні підсумки; власні перекази та корекції не входять у звичайні доходи й витрати.
+          - Додаткові фінансові, міграційні та UI-перевірки.
+
+          ### Встановлення
+          Завантажте **Moi-Finansy-debug.apk** у розділі Assets нижче та відкрийте його на телефоні. За потреби дозвольте встановлення з цього джерела.
+
+          Для оновлення встановіть APK поверх попередньої версії, не видаляючи застосунок. Цей реліз використовує той самий сертифікат підпису; історія збережеться. Файл SHA256SUMS дозволяє перевірити завантаження.
+          NOTES
+          # Publish the tested, committed APK. Rebuilding on the runner would use a different debug key.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" releases/Moi-Finansy-debug.apk releases/SHA256SUMS --clobber
+          else
+            gh release create "$RELEASE_TAG" releases/Moi-Finansy-debug.apk releases/SHA256SUMS \
+              --verify-tag --title "Мої Фінанси $RELEASE_TAG" --notes-file /tmp/release-notes.md --latest
+          fi
+          gh release edit "$RELEASE_TAG" --draft=false --latest

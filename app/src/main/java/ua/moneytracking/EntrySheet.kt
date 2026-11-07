@@ -66,7 +66,9 @@ internal fun EntrySheet(
     var replaceAmount by rememberSaveable { mutableStateOf(original != null) }
     var account by rememberSaveable { mutableLongStateOf(original?.accountId ?: defaultAccount.id) }
     var target by rememberSaveable { mutableStateOf(original?.targetId ?: state.accounts.firstOrNull { it.id != account }?.id) }
-    var category by rememberSaveable { mutableStateOf(if (original != null) original.categoryId else initialCategory ?: state.categories.firstOrNull()?.id) }
+    var category by rememberSaveable { mutableStateOf(if (original != null) original.categoryId else if (initialKind == "expense") initialCategory ?: state.categories.firstOrNull()?.id else null) }
+    var incomeSource by rememberSaveable { mutableStateOf(original?.incomeSource?.takeIf { it in listOf("salary", "person", "other") } ?: "other") }
+    var sender by rememberSaveable { mutableStateOf(original?.sender.orEmpty()) }
     var timestamp by rememberSaveable { mutableLongStateOf(original?.time ?: System.currentTimeMillis()) }
     var note by rememberSaveable { mutableStateOf(original?.note.orEmpty()) }
     var error by rememberSaveable { mutableStateOf("") }
@@ -74,6 +76,7 @@ internal fun EntrySheet(
     var calculator by rememberSaveable { mutableStateOf(false) }
     var accountPicker by remember { mutableStateOf(false) }
     var categoryPicker by remember { mutableStateOf(false) }
+    var incomeSourcePicker by remember { mutableStateOf(false) }
     var notePicker by remember { mutableStateOf(false) }
     var noteDraft by rememberSaveable { mutableStateOf(note) }
     val date = Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDateTime()
@@ -88,7 +91,8 @@ internal fun EntrySheet(
     val calculatorTint by animateColorAsState(if (calculator) Accent else Muted, tween(150), label = "Calculator selection")
     val evaluated = AmountInput.evaluate(expression)
     val validTransfer = !transfer || (target != null && target != account)
-    val canSave = evaluated != null && evaluated > 0 && validTransfer && selectedAccount != null
+    val validIncomeSource = kind != "income" || (sender.trim().length <= 120 && (incomeSource != "person" || sender.isNotBlank()))
+    val canSave = evaluated != null && evaluated > 0 && validTransfer && validIncomeSource && selectedAccount != null
     val saveLabel = if (original != null) "Зберегти зміни" else when (kind) {
         "income" -> "Додати дохід"
         "transfer" -> "Переказати"
@@ -108,7 +112,23 @@ internal fun EntrySheet(
         val amount = AmountInput.evaluate(expression)
         if (amount == null || amount <= 0) error = "Введіть суму більше нуля."
         else if (!validTransfer) error = "Оберіть два різні рахунки для переказу."
-        else if (selectedAccount != null) save(Entry(original?.id ?: 0, kind, amount, account, if (transfer) target else null, if (transfer) null else category, timestamp, note.trim()))
+        else if (!validIncomeSource) error = "Вкажіть, від кого надійшли кошти (до 120 символів)."
+        else if (selectedAccount != null) save(Entry(
+            id = original?.id ?: 0,
+            kind = kind,
+            amount = amount,
+            accountId = account,
+            targetId = if (transfer) target else null,
+            categoryId = when (kind) {
+                "transfer" -> null
+                "income" -> original?.takeIf { it.kind == "income" }?.categoryId
+                else -> category
+            },
+            time = timestamp,
+            note = note.trim(),
+            incomeSource = if (kind == "income") incomeSource else "other",
+            sender = if (kind == "income") sender.trim() else ""
+        ))
     }
     fun pickDate() {
         DatePickerDialog(context, { _, y, m, d -> setDate(LocalDate.of(y, m + 1, d).atTime(date.toLocalTime())) }, date.year, date.monthValue - 1, date.dayOfMonth).show()
@@ -154,7 +174,17 @@ internal fun EntrySheet(
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     EntrySelection(if (transfer) "З рахунку" else "Рахунок", selectedAccount?.name ?: "Оберіть", if (selectedAccount?.cash == true) Icons.Default.Payments else Icons.Default.CreditCard, Accent, Modifier.weight(1f)) { accountPicker = true }
-                    EntrySelection(if (transfer) "На рахунок" else "Категорія", if (transfer) state.accounts.find { it.id == target }?.name ?: "Оберіть" else selectedCategory?.name ?: "Без категорії", if (transfer) Icons.Default.SwapHoriz else selectedCategory?.let { categoryIcon(it.icon) } ?: Icons.Default.Category, if (transfer) Accent else selectedCategory?.let { Color(it.color) } ?: Muted, Modifier.weight(1f)) { categoryPicker = true }
+                    when (kind) {
+                        "income" -> EntrySelection(
+                            "Джерело",
+                            incomeSourceLabel(incomeSource) + if (sender.isNotBlank()) " · ${sender.trim()}" else "",
+                            when (incomeSource) { "salary" -> Icons.Default.WorkOutline; "person" -> Icons.Default.PersonOutline; else -> Icons.Default.SouthWest },
+                            Green,
+                            Modifier.weight(1f),
+                            valueLines = 2
+                        ) { incomeSourcePicker = true }
+                        else -> EntrySelection(if (transfer) "На рахунок" else "Категорія", if (transfer) state.accounts.find { it.id == target }?.name ?: "Оберіть" else selectedCategory?.name ?: "Без категорії", if (transfer) Icons.Default.SwapHoriz else selectedCategory?.let { categoryIcon(it.icon) } ?: Icons.Default.Category, if (transfer) Accent else selectedCategory?.let { Color(it.color) } ?: Muted, Modifier.weight(1f)) { categoryPicker = true }
+                    }
                 }
                 Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { details = !details }, contentPadding = PaddingValues(horizontal = 0.dp), modifier = Modifier.weight(1f)) {
@@ -186,6 +216,7 @@ internal fun EntrySheet(
                     }
                 }
                 if (!validTransfer) Text("Для переказу оберіть два різні рахунки.", color = Muted, fontSize = 12.sp)
+                if (!validIncomeSource) Text("Оберіть джерело та вкажіть, від кого надійшли кошти.", color = Muted, fontSize = 12.sp)
                 if (error.isNotBlank()) Text(error, fontSize = 12.sp, color = Red)
                 AnimatedVisibility(
                     visible = calculator,
@@ -226,6 +257,12 @@ internal fun EntrySheet(
         if (target == account) target = state.accounts.firstOrNull { a -> a.id != account }?.id
         accountPicker = false
     }
+    if (incomeSourcePicker) IncomeSourceDialog(incomeSource, sender, { incomeSourcePicker = false }) { source, name ->
+        incomeSource = source
+        sender = name
+        error = ""
+        incomeSourcePicker = false
+    }
     if (categoryPicker) {
         if (transfer) EntryAccountPicker(state, state.accounts.filter { it.id != account }, "Куди переказати", target, { categoryPicker = false }) { target = it.id; categoryPicker = false }
         else AlertDialog(onDismissRequest = { categoryPicker = false }, title = { Text("Категорія") }, text = {
@@ -242,19 +279,19 @@ internal fun EntrySheet(
             }
         }, confirmButton = { TextButton(onClick = { category = null; categoryPicker = false }) { Text("Без категорії") } }, dismissButton = { TextButton(onClick = { categoryPicker = false }) { Text("Закрити") } })
     }
-    if (notePicker) AlertDialog(onDismissRequest = { notePicker = false }, title = { Text("Коментар") }, text = {
+    if (notePicker) FormDialog("Коментар", { notePicker = false }, { note = noteDraft; notePicker = false }, saveLabel = "Готово", maxPanelHeight = 360.dp) {
         OutlinedTextField(value = noteDraft, onValueChange = { noteDraft = it.take(500) }, placeholder = { Text("Наприклад, продукти на вечерю") }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 4, shape = RoundedCornerShape(14.dp))
-    }, confirmButton = { TextButton(onClick = { note = noteDraft; notePicker = false }) { Text("Готово") } }, dismissButton = { TextButton(onClick = { notePicker = false }) { Text("Скасувати") } })
+    }
 }
 
-@Composable private fun EntrySelection(label: String, value: String, icon: ImageVector, color: Color, modifier: Modifier, click: () -> Unit) {
+@Composable private fun EntrySelection(label: String, value: String, icon: ImageVector, color: Color, modifier: Modifier, valueLines: Int = 1, click: () -> Unit) {
     val tint by animateColorAsState(color, tween(150), label = "Transaction field tint")
     Surface(onClick = click, modifier = modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(14.dp), color = Bg, border = BorderStroke(1.dp, Muted.copy(alpha = .12f))) {
         Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, tint = tint, modifier = Modifier.size(20.dp))
             Column(Modifier.weight(1f).padding(start = 8.dp)) {
                 Text(label, fontSize = 10.sp, lineHeight = 14.sp, color = Muted)
-                Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+                Text(value, maxLines = valueLines, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
             }
             Icon(Icons.Default.ExpandMore, null, tint = Muted, modifier = Modifier.size(15.dp))
         }
@@ -284,4 +321,66 @@ internal fun EntrySheet(
             }
         }
     }, confirmButton = { TextButton(onClick = dismiss) { Text("Закрити") } })
+}
+
+
+@Composable
+private fun IncomeSourceDialog(
+    initialSource: String,
+    initialSender: String,
+    dismiss: () -> Unit,
+    confirm: (String, String) -> Unit
+) {
+    var source by rememberSaveable { mutableStateOf(initialSource) }
+    var sender by rememberSaveable { mutableStateOf(initialSender) }
+    var attempted by rememberSaveable { mutableStateOf(false) }
+    val missingPerson = source == "person" && sender.isBlank()
+    val fieldLabel = when (source) {
+        "salary" -> "Роботодавець (необов’язково)"
+        "person" -> "Від кого"
+        else -> "Назва джерела (необов’язково)"
+    }
+    FormDialog(
+        title = "Джерело надходження", dismiss = dismiss,
+        save = { attempted = true; if (!missingPerson) confirm(source, sender.trim()) },
+        saveLabel = "Готово", maxPanelHeight = 520.dp
+    ) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("salary" to "Зарплата", "person" to "Від людини", "other" to "Інше").forEach { (value, label) ->
+                Surface(
+                    onClick = { source = value; attempted = false },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = if (source == value) Accent.copy(alpha = .12f) else Color.Transparent,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(when (value) { "salary" -> Icons.Default.WorkOutline; "person" -> Icons.Default.PersonOutline; else -> Icons.Default.SouthWest }, null, tint = if (source == value) Accent else Muted, modifier = Modifier.size(20.dp))
+                        Text(label, modifier = Modifier.weight(1f).padding(start = 10.dp), fontSize = 14.sp)
+                        if (source == value) Icon(Icons.Default.Check, null, tint = Accent, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+            // A static label avoids remeasuring the floating label when the source changes.
+            Text(fieldLabel, color = Muted, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            OutlinedTextField(
+                value = sender,
+                onValueChange = { sender = it.take(120); attempted = false },
+                placeholder = { Text(if (source == "person") "Наприклад, Олена" else if (source == "salary") "Наприклад, назва компанії" else "Наприклад, повернення боргу", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = fieldLabel },
+                singleLine = true,
+                isError = attempted && missingPerson,
+                supportingText = {
+                    Text(
+                        if (attempted && missingPerson) "Вкажіть ім’я або назву відправника."
+                        else if (source == "person") "Ім’я або назва відправника — обов’язково."
+                        else "Це поле можна залишити порожнім.",
+                        minLines = 2,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                shape = RoundedCornerShape(14.dp)
+            )
+        }
+    }
 }
